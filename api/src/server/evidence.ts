@@ -1,4 +1,4 @@
-import type { Source } from "@/lib/contract";
+import type { Source } from "../../../src/lib/contract";
 
 export type Chunk = { chunk_id: string; parent_id?: string; title: string; chunk: string };
 export type Evidence = { id: string; title: string; text: string };

@@ -10,3 +10,7 @@ test-results/
 *.tsbuildinfo
 npm-debug.log*
 .DS_Store
+api/dist/
+api/.test-host/
+api/.local-storage/
+api/local.settings.json

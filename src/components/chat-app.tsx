@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { type ChatEvent, type AnswerSection } from "@/lib/contract";
 import { historyKey, requestHistory, restoreHistory, type Conversation, type Message } from "@/lib/history";
 import { readChatStream } from "@/lib/stream";
+import { apiUrl } from "@/lib/api";
 import { Answer } from "./answer";
 import { Icon, PlutoMark } from "./icon";
 
@@ -62,7 +63,7 @@ export function ChatApp() {
     } catch { historyWritable.current = false; setStorageError("Saved chats could not be loaded. You can continue, or clear this browser's saved chats."); }
     setReady(true);
     const controller = new AbortController();
-    fetch("/api/health", { signal: controller.signal }).then(async (response) => {
+    Promise.resolve().then(() => fetch(apiUrl("health"), { signal: controller.signal })).then(async (response) => {
       if (!response.ok) throw new Error("The demo server is not ready.");
       const health: unknown = await response.json();
       if (typeof health === "object" && health && "webAvailable" in health) setWebAvailable(health.webAvailable === true);
@@ -114,11 +115,11 @@ export function ChatApp() {
     const controller = new AbortController();
     abort.current = controller;
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: trimmed, includeWeb, history }), signal: controller.signal });
+      const response = await fetch(apiUrl("chat"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: trimmed, includeWeb, history }), signal: controller.signal });
       await readChatStream(response, (event) => updateAnswer(id, messageId, (message) => applyEvent(message, event)));
     } catch (failure) {
       const stopped = controller.signal.aborted;
-      const message = stopped ? "Response stopped. You can ask another question." : failure instanceof Error ? failure.message : "The answer could not be completed. Please retry.";
+      const message = stopped ? "Response stopped in this browser. The server may continue processing until its deadline." : failure instanceof Error ? failure.message : "The answer could not be completed. Please retry.";
       if (!stopped) setError(message);
       updateAnswer(id, messageId, (answer) => ({
         ...answer, status: stopped ? "stopped" : "error",

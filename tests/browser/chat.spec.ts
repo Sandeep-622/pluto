@@ -97,3 +97,24 @@ test("mobile layout keeps the composer accessible and navigation usable", async 
   await page.getByRole("button", { name: "Close navigation" }).click({ position: { x: 350, y: 100 } });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test("static UI streams from the actual cross-origin Functions host", async ({ page }) => {
+  await page.unroute("**/api/health");
+  await page.goto("/");
+  await page.getByLabel("Your medical book question").fill("Local integration");
+  await page.getByRole("button", { name: "Send question" }).click();
+  await expect(page.getByText("Local Functions streaming is working.", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("Book citations")).toContainText("Local mock book");
+  await expect(page.getByRole("button", { name: "Send question" })).toBeVisible();
+});
+
+test("stopping a real cross-origin stream leaves the UI usable", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Your medical book question").fill("slow");
+  await page.getByRole("button", { name: "Send question" }).click();
+  await expect(page.getByText("Local Functions streaming is working.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Stop response" }).click();
+  await expect(page.getByRole("button", { name: "Send question" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Your medical book question")).toBeEnabled();
+});

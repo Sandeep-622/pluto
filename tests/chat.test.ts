@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent, ChatRequest } from "@/lib/contract";
 
 const mocks = vi.hoisted(() => ({ retrieve: vi.fn(), model: vi.fn() }));
-vi.mock("@/lib/server/search", () => ({ retrieveBooks: mocks.retrieve }));
-vi.mock("@/lib/server/openai", () => ({ streamModel: mocks.model }));
-vi.mock("@/lib/server/config", () => ({ getConfig: () => ({ ENABLE_WEB_SEARCH: "true" }) }));
-import { runChat } from "@/lib/server/chat";
+vi.mock("@api/server/search", () => ({ retrieveBooks: mocks.retrieve }));
+vi.mock("@api/server/openai", () => ({ streamModel: mocks.model }));
+vi.mock("@api/server/config", () => ({ getConfig: () => ({ ENABLE_WEB_SEARCH: "true" }) }));
+import { runChat } from "@api/server/chat";
 
 const request: ChatRequest = { question: "What causes headache?", includeWeb: false, history: [] };
 const evidence = [{ id: "B1", title: "Verified book", text: "Readable source" }];

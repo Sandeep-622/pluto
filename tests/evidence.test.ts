@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { citedBookSources, hasUnknownBookCitations, isReadable, selectEvidence } from "@/lib/server/evidence";
+import { citedBookSources, hasUnknownBookCitations, isReadable, selectEvidence } from "@api/server/evidence";
 import { safeUrl } from "@/lib/contract";
 
 const readable = "A headache can have several causes. This passage contains readable medical text and preserves symbols such as α, β, µ and ≥ for educational study. ";
