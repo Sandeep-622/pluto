@@ -137,6 +137,21 @@ a.source-card:hover { border-color: #8ba774; }
 .request-error, .global-warning { background: #fbefe4; color: #916039; padding: 10px 13px; font-size: 11px; border-radius: 5px; margin-bottom: 8px; line-height: 1.6; display: flex; justify-content: space-between; gap: 8px; }
 .request-error button { background: none; color: inherit; }
 .global-warning { margin: 10px 26px 0; }
+.auth-gate { border: 1px solid #dce3d3; background: #fff; border-radius: 12px; padding: 18px 20px; box-shadow: 0 3px 14px #384b2910; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.auth-gate-copy { display: flex; flex-direction: column; gap: 4px; min-width: 200px; flex: 1; }
+.auth-gate-copy strong { font-size: 13px; color: #244736; font-weight: 600; }
+.auth-gate-copy span { font-size: 11px; line-height: 1.5; color: #7e8b79; }
+.google-signin-wrap { min-height: 40px; display: flex; align-items: center; }
+.google-signin-wrap.disabled { opacity: .5; pointer-events: none; }
+.auth-error-inline { color: #a35b46; font-size: 11px; margin: 0; }
+.account-card { border-top: 1px solid #dfe5d6; padding: 12px 3px 14px; display: flex; flex-direction: column; gap: 9px; }
+.account-meta { display: flex; align-items: flex-start; gap: 9px; color: #4f654b; min-width: 0; }
+.account-meta svg { margin-top: 2px; flex-shrink: 0; }
+.account-meta > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.account-meta strong { font-size: 11px; font-weight: 600; color: #2d4c3b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-meta small { font-size: 9px; color: #7f8d79; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sign-out { display: inline-flex; align-items: center; gap: 6px; width: fit-content; background: #e5ece0; color: #345441; font-size: 10px; font-weight: 500; padding: 5px 9px; border-radius: 5px; }
+.sign-out:hover { background: #d8e3d0; }
 .mobile-menu, .sidebar-overlay { display: none; }
 .icon-button { background: none; color: var(--ink); padding: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border-width: 0; }

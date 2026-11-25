@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { type ChatEvent, type AnswerSection } from "@/lib/contract";
+import { authStorageKey, isAuthSessionValid, parseGoogleCredential, restoreAuthSession, type AuthSession } from "@/lib/auth";
 import { historyKey, requestHistory, restoreHistory, type Conversation, type Message } from "@/lib/history";
 import { readChatStream } from "@/lib/stream";
 import { apiUrl } from "@/lib/api";
 import { Answer } from "./answer";
+import { GoogleSignInButton } from "./google-auth";
 import { Icon, PlutoMark } from "./icon";
 
 const suggestions = [
@@ -44,6 +46,7 @@ export function ChatApp() {
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState("");
   const [webAvailable, setWebAvailable] = useState(true);
+  const [auth, setAuth] = useState<AuthSession | null>(null);
   const abort = useRef<AbortController | null>(null);
   const sending = useRef(false);
   const historyWritable = useRef(true);
@@ -61,6 +64,14 @@ export function ChatApp() {
         setActiveId(restored[0]?.id ?? null);
       }
     } catch { historyWritable.current = false; setStorageError("Saved chats could not be loaded. You can continue, or clear this browser's saved chats."); }
+    try {
+      const savedAuth = localStorage.getItem(authStorageKey);
+      if (savedAuth) {
+        const restoredAuth = restoreAuthSession(savedAuth);
+        if (restoredAuth) setAuth(restoredAuth);
+        else localStorage.removeItem(authStorageKey);
+      }
+    } catch { /* Ignore browser storage failures for auth state; user can sign in again. */ }
     setReady(true);
     const controller = new AbortController();
     Promise.resolve().then(() => fetch(apiUrl("health"), { signal: controller.signal })).then(async (response) => {
@@ -96,9 +107,37 @@ export function ChatApp() {
     } : item));
   }
 
+  function handleCredential(credential: string) {
+    try {
+      const session = parseGoogleCredential(credential);
+      setAuth(session);
+      setError("");
+      try { localStorage.setItem(authStorageKey, JSON.stringify(session)); }
+      catch { /* Keep session in memory for this tab if storage is blocked. */ }
+      textarea.current?.focus();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not complete Google sign-in.");
+    }
+  }
+
+  function signOut() {
+    if (sending.current) return;
+    try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+    window.google?.accounts?.id?.disableAutoSelect?.();
+    setAuth(null);
+    setError("");
+    setSidebarOpen(false);
+  }
+
   async function send(text = question) {
     const trimmed = text.trim();
     if (!trimmed || trimmed.length > 2000 || sending.current || !ready) return;
+    if (!isAuthSessionValid(auth)) {
+      try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+      setAuth(null);
+      setError("Sign in with Google to ask a question.");
+      return;
+    }
     if ((conversation?.messages.length ?? 0) >= 98) { setError("This chat has reached the demo limit. Start a new chat to continue."); return; }
     sending.current = true;
     const id = activeId ?? crypto.randomUUID();
@@ -115,7 +154,16 @@ export function ChatApp() {
     const controller = new AbortController();
     abort.current = controller;
     try {
-      const response = await fetch(apiUrl("chat"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: trimmed, includeWeb, history }), signal: controller.signal });
+      const response = await fetch(apiUrl("chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.token}` },
+        body: JSON.stringify({ question: trimmed, includeWeb, history }),
+        signal: controller.signal
+      });
+      if (response.status === 401) {
+        try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+        setAuth(null);
+      }
       await readChatStream(response, (event) => updateAnswer(id, messageId, (message) => applyEvent(message, event)));
     } catch (failure) {
       const stopped = controller.signal.aborted;
@@ -146,6 +194,13 @@ export function ChatApp() {
       <div className="sidebar-bottom">
         <div className="local-note"><Icon name="shield" size={16}/><span>Just this browser.<br/><small>Your chat history stays on this device.</small></span></div>
         <button className="clear-history" disabled={busy || (!conversations.length && !storageError)} onClick={() => { if (!window.confirm("Delete all saved chats from this browser?")) return; try { localStorage.removeItem(historyKey); historyWritable.current = true; setConversations([]); setActiveId(null); setStorageError(""); } catch { setStorageError("This browser blocked clearing saved chats. Please clear site data in your browser settings."); } }}><Icon name="trash" size={14}/>Clear history</button>
+        {auth && <div className="account-card">
+          <div className="account-meta">
+            <Icon name="user" size={15}/>
+            <div><strong>{auth.name || "Signed in"}</strong><small>{auth.email}</small></div>
+          </div>
+          <button className="sign-out" type="button" disabled={busy} onClick={signOut}><Icon name="logout" size={14}/>Sign out</button>
+        </div>}
         <div className="demo-label"><span/>EXPLORATION MODE <b>POC</b></div>
       </div>
     </aside>
@@ -170,12 +225,20 @@ export function ChatApp() {
 
       <div className="composer-area">
         {error && <div className="request-error" role="alert">{error}<button aria-label="Dismiss message" onClick={() => setError("")}><Icon name="close" size={14}/></button></div>}
-        <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-          <label className="sr-only" htmlFor="question">Your medical book question</label>
-          <textarea ref={textarea} id="question" placeholder="What would you like to understand?" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={2000} rows={2} disabled={busy} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }}/>
-          <div className="composer-toolbar"><div className="composer-tools"><span className="book-tool"><Icon name="book" size={15}/>Your books</span><span className="tool-separator"/><label className={`web-toggle ${includeWeb ? "enabled" : ""}`}><input type="checkbox" checked={includeWeb} disabled={busy || !webAvailable} onChange={(event) => setIncludeWeb(event.target.checked)}/><span className="toggle-track"/><Icon name="globe" size={15}/><span>Include web</span></label></div><div className="send-controls"><span className="character-count">{question.length > 1600 ? `${question.length}/2000` : ""}</span>{busy ? <button className="send-button stop-button" type="button" aria-label="Stop response" onClick={() => abort.current?.abort()}><Icon name="stop" size={17}/></button> : <button className="send-button" type="submit" disabled={!question.trim() || !ready} aria-label="Send question"><Icon name="arrow" size={20}/></button>}</div></div>
-        </form>
-        <p className="mode-help">{includeWeb ? "Web findings first, then your books. Web search costs extra and sends your question to a public-web service outside the Azure compliance boundary. Do not include patient details." : webAvailable ? "Book-only answers. Switch on web to add website findings before your book sources." : "Book-only answers. Web search is currently disabled by the administrator."}</p>
+        {ready && !auth ? <div className="auth-gate">
+          <div className="auth-gate-copy">
+            <strong>Sign in with Google to ask questions</strong>
+            <span>Any Google account is welcome. Your saved conversations stay on this device.</span>
+          </div>
+          <GoogleSignInButton onCredential={handleCredential} onError={(message) => setError(message)} />
+        </div> : <>
+          <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+            <label className="sr-only" htmlFor="question">Your medical book question</label>
+            <textarea ref={textarea} id="question" placeholder="What would you like to understand?" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={2000} rows={2} disabled={busy} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }}/>
+            <div className="composer-toolbar"><div className="composer-tools"><span className="book-tool"><Icon name="book" size={15}/>Your books</span><span className="tool-separator"/><label className={`web-toggle ${includeWeb ? "enabled" : ""}`}><input type="checkbox" checked={includeWeb} disabled={busy || !webAvailable} onChange={(event) => setIncludeWeb(event.target.checked)}/><span className="toggle-track"/><Icon name="globe" size={15}/><span>Include web</span></label></div><div className="send-controls"><span className="character-count">{question.length > 1600 ? `${question.length}/2000` : ""}</span>{busy ? <button className="send-button stop-button" type="button" aria-label="Stop response" onClick={() => abort.current?.abort()}><Icon name="stop" size={17}/></button> : <button className="send-button" type="submit" disabled={!question.trim() || !ready} aria-label="Send question"><Icon name="arrow" size={20}/></button>}</div></div>
+          </form>
+          <p className="mode-help">{includeWeb ? "Web findings first, then your books. Web search costs extra and sends your question to a public-web service outside the Azure compliance boundary. Do not include patient details." : webAvailable ? "Book-only answers. Switch on web to add website findings before your book sources." : "Book-only answers. Web search is currently disabled by the administrator."}</p>
+        </>}
         <p className="disclaimer">For learning, not medical decisions. Sources may be incomplete or outdated. Don&apos;t enter identifiable patient information.</p>
       </div>
     </main>

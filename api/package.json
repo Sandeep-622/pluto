@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "main": "dist/index.js",
-  "engines": { "node": ">=24 <25" },
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --packages=external --outfile=dist/index.js",
     "typecheck": "tsc --noEmit",
@@ -13,13 +15,14 @@
   },
   "dependencies": {
     "@azure/functions": "4.17.1",
+    "google-auth-library": "^11.3.4",
     "openai": "7.57.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "azurite": "3.37.0",
     "azure-functions-core-tools": "4.16.1",
+    "azurite": "3.37.0",
     "esbuild": "0.28.2",
     "typescript": "~5.9.3"
   }

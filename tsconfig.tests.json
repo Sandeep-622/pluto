@@ -6,7 +6,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@api/*": ["./api/src/*"],
-      "@azure/functions": ["./api/node_modules/@azure/functions"]
+      "@azure/functions": ["./api/node_modules/@azure/functions"],
+      "google-auth-library": ["./api/node_modules/google-auth-library"]
     }
   },
   "include": ["tests/**/*.ts", "vitest.config.ts", "playwright.config.ts"],
