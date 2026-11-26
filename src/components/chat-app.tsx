@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { type ChatEvent, type AnswerSection } from "@/lib/contract";
+import { type ChatEvent, type AnswerSection, type FeedbackValue } from "@/lib/contract";
 import { authStorageKey, isAuthSessionValid, parseGoogleCredential, restoreAuthSession, type AuthSession } from "@/lib/auth";
 import { historyKey, requestHistory, restoreHistory, type Conversation, type Message } from "@/lib/history";
 import { readChatStream } from "@/lib/stream";
@@ -105,6 +105,36 @@ export function ChatApp() {
     setConversations((items) => items.map((item) => item.id === id ? {
       ...item, messages: item.messages.map((message) => message.id === messageId ? update(message) : message)
     } : item));
+  }
+
+  async function submitFeedback(conversationId: string, messageId: string, messageIncludeWeb: boolean, value: FeedbackValue) {
+    if (!isAuthSessionValid(auth)) {
+      try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+      setAuth(null);
+      setError("Sign in with Google to share feedback.");
+      return;
+    }
+    const previous = conversations.find((c) => c.id === conversationId)?.messages.find((m) => m.id === messageId)?.feedback;
+    updateAnswer(conversationId, messageId, (message) => ({ ...message, feedback: value }));
+    try {
+      const response = await fetch(apiUrl("feedback"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.token}` },
+        body: JSON.stringify({ messageId, feedback: value, includeWeb: messageIncludeWeb })
+      });
+      if (response.status === 401) {
+        try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+        setAuth(null);
+      }
+      if (!response.ok) {
+        const data: unknown = await response.json().catch(() => null);
+        const msg = typeof data === "object" && data && "error" in data && typeof data.error === "string" ? data.error : "Could not save feedback.";
+        throw new Error(msg);
+      }
+    } catch (failure) {
+      updateAnswer(conversationId, messageId, (message) => ({ ...message, feedback: previous }));
+      setError(failure instanceof Error ? failure.message : "Could not save feedback.");
+    }
   }
 
   function handleCredential(credential: string) {
@@ -236,7 +266,7 @@ export function ChatApp() {
           <p className="grounding-note"><Icon name="check" size={14}/>Book-level citations. No guesswork disguised as a source.</p>
         </div> : <div className="message-list">{messages.map((message) => message.role === "user"
           ? <div className="user-message" key={message.id}><div className="user-label">YOU<span>{message.includeWeb ? "Books + web" : "Book only"}</span></div><p>{message.text}</p></div>
-          : <Answer key={message.id} sections={message.sections} includeWeb={message.includeWeb} loading={message.status === "loading"}/>)}<div ref={bottom}/></div>}
+          : <Answer key={message.id} sections={message.sections} includeWeb={message.includeWeb} loading={message.status === "loading"} feedback={message.feedback} onFeedback={(value) => { if (activeId) void submitFeedback(activeId, message.id, message.includeWeb, value); }}/>)}<div ref={bottom}/></div>}
       </div>
 
       <div className="composer-area">

@@ -171,6 +171,11 @@ test("static UI streams from the actual cross-origin Functions host", async ({ p
   await expect(page.getByText("Local Functions streaming is working.", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Book citations")).toContainText("Local mock book");
   await expect(page.getByRole("button", { name: "Send question" })).toBeVisible();
+  await page.getByRole("button", { name: "Helpful", exact: true }).click();
+  await expect(page.getByText("Thanks for the feedback.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Helpful", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Helpful", exact: true })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("stopping a real cross-origin stream leaves the UI usable", async ({ page }) => {

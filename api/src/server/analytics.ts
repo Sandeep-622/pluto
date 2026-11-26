@@ -1,5 +1,6 @@
 import { TableClient, TableServiceClient } from "@azure/data-tables";
 import { randomUUID } from "node:crypto";
+import type { FeedbackValue } from "../../../src/lib/contract";
 
 export type ChatOutcome = "complete" | "aborted" | "error";
 
@@ -22,34 +23,74 @@ export type AnalyticsRow = AnalyticsInput & {
   createdAt: string;
 };
 
+export type FeedbackInput = {
+  userSub: string;
+  userEmail: string;
+  messageId: string;
+  feedback: FeedbackValue;
+  includeWeb: boolean;
+};
+
+export type FeedbackRow = FeedbackInput & {
+  partitionKey: string;
+  rowKey: string;
+  date: string;
+  updatedAt: string;
+};
+
 const tableName = "plutoanalytics";
+const feedbackTableName = "plutofeedback";
 const tableReady = new Map<string, Promise<void>>();
 
 function storageConnectionString(): string | undefined {
   return process.env.ANALYTICS_STORAGE_CONNECTION_STRING?.trim() || process.env.AzureWebJobsStorage?.trim() || undefined;
 }
 
-function getClient(connectionString: string): TableClient {
+function getClient(connectionString: string, name = tableName): TableClient {
   const allowInsecureConnection = connectionString.includes("http://") || connectionString.includes("DefaultEndpointsProtocol=http");
-  return TableClient.fromConnectionString(connectionString, tableName, { allowInsecureConnection });
+  return TableClient.fromConnectionString(connectionString, name, { allowInsecureConnection });
 }
 
-async function ensureTable(connectionString: string): Promise<void> {
-  let pending = tableReady.get(connectionString);
+async function ensureTable(connectionString: string, name = tableName): Promise<void> {
+  const cacheKey = `${connectionString}::${name}`;
+  let pending = tableReady.get(cacheKey);
   if (!pending) {
     const allowInsecureConnection = connectionString.includes("http://") || connectionString.includes("DefaultEndpointsProtocol=http");
     const service = TableServiceClient.fromConnectionString(connectionString, { allowInsecureConnection });
-    pending = service.createTable(tableName).catch((error: unknown) => {
+    pending = service.createTable(name).catch((error: unknown) => {
       const code = typeof error === "object" && error && "statusCode" in error ? error.statusCode : undefined;
       if (code !== 409) throw error;
     });
-    tableReady.set(connectionString, pending);
+    tableReady.set(cacheKey, pending);
   }
   try {
     await pending;
   } catch (error) {
-    tableReady.delete(connectionString);
+    tableReady.delete(cacheKey);
     throw error;
+  }
+}
+
+function safeKey(value: string): string {
+  return value.replace(/[\\/#?\u0000-\u001f\u007f-\u009f]/g, "_");
+}
+
+export async function recordFeedback(entry: FeedbackInput): Promise<void> {
+  const connectionString = storageConnectionString();
+  if (!connectionString) return;
+  try {
+    await ensureTable(connectionString, feedbackTableName);
+    const updatedAt = new Date().toISOString();
+    const entity: FeedbackRow = {
+      partitionKey: safeKey(entry.userSub),
+      rowKey: safeKey(entry.messageId),
+      ...entry,
+      date: updatedAt.slice(0, 10),
+      updatedAt
+    };
+    await getClient(connectionString, feedbackTableName).upsertEntity(entity, "Replace");
+  } catch (error) {
+    console.warn("Feedback write skipped", { type: error instanceof Error ? error.name : "unknown" });
   }
 }
 
@@ -82,14 +123,16 @@ function recentDates(days: number): string[] {
   return result;
 }
 
-export async function queryChatAnalyticsRows(days = 7): Promise<{ days: number; rows: AnalyticsRow[] }> {
+export async function queryChatAnalyticsRows(days = 7): Promise<{ days: number; rows: AnalyticsRow[]; feedbackRows: FeedbackRow[] }> {
   const boundedDays = Math.min(90, Math.max(1, Math.floor(days)));
   const connectionString = storageConnectionString();
   const rows: AnalyticsRow[] = [];
+  const feedbackRows: FeedbackRow[] = [];
   if (connectionString) {
-    await ensureTable(connectionString);
-    const filter = recentDates(boundedDays).map((date) => `PartitionKey eq '${date}'`).join(" or ");
-    for await (const entity of getClient(connectionString).listEntities<AnalyticsRow>({ queryOptions: { filter } })) {
+    const dates = recentDates(boundedDays);
+    await ensureTable(connectionString, tableName);
+    const filter = dates.map((date) => `PartitionKey eq '${date}'`).join(" or ");
+    for await (const entity of getClient(connectionString, tableName).listEntities<AnalyticsRow>({ queryOptions: { filter } })) {
       rows.push({
         partitionKey: String(entity.partitionKey ?? ""),
         rowKey: String(entity.rowKey ?? ""),
@@ -107,12 +150,30 @@ export async function queryChatAnalyticsRows(days = 7): Promise<{ days: number; 
       });
       if (rows.length >= 5000) break;
     }
+
+    await ensureTable(connectionString, feedbackTableName);
+    const feedbackFilter = dates.map((date) => `date eq '${date}'`).join(" or ");
+    for await (const entity of getClient(connectionString, feedbackTableName).listEntities<FeedbackRow>({ queryOptions: { filter: feedbackFilter } })) {
+      feedbackRows.push({
+        partitionKey: String(entity.partitionKey ?? ""),
+        rowKey: String(entity.rowKey ?? ""),
+        userSub: String(entity.userSub ?? ""),
+        userEmail: String(entity.userEmail ?? ""),
+        messageId: String(entity.messageId ?? ""),
+        feedback: entity.feedback === "not_helpful" ? "not_helpful" : "helpful",
+        includeWeb: Boolean(entity.includeWeb),
+        date: String(entity.date ?? ""),
+        updatedAt: String(entity.updatedAt ?? "")
+      });
+      if (feedbackRows.length >= 5000) break;
+    }
   }
   rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return { days: boundedDays, rows };
+  feedbackRows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return { days: boundedDays, rows, feedbackRows };
 }
 
-export function summarizeAnalytics(rows: AnalyticsRow[], days: number) {
+export function summarizeAnalytics(rows: AnalyticsRow[], days: number, feedbackRows: FeedbackRow[] = []) {
   const users = new Set<string>();
   const byUserMap = new Map<string, { userSub: string; userEmail: string; queries: number; webQueries: number; totalInputTokens: number; totalOutputTokens: number }>();
   const byDayMap = new Map<string, { date: string; queries: number; users: Set<string>; webQueries: number; errors: number }>();
@@ -150,6 +211,13 @@ export function summarizeAnalytics(rows: AnalyticsRow[], days: number) {
     byDayMap.set(row.partitionKey, day);
   }
 
+  let helpfulCount = 0;
+  let notHelpfulCount = 0;
+  for (const entry of feedbackRows) {
+    if (entry.feedback === "helpful") helpfulCount += 1;
+    else notHelpfulCount += 1;
+  }
+
   return {
     days,
     summary: {
@@ -161,19 +229,22 @@ export function summarizeAnalytics(rows: AnalyticsRow[], days: number) {
       abortedCount,
       totalInputTokens,
       totalOutputTokens,
-      avgDurationMs: rows.length ? Math.round(totalDurationMs / rows.length) : 0
+      avgDurationMs: rows.length ? Math.round(totalDurationMs / rows.length) : 0,
+      helpfulCount,
+      notHelpfulCount
     },
     byDay: [...byDayMap.values()]
       .sort((a, b) => b.date.localeCompare(a.date))
       .map((day) => ({ date: day.date, queries: day.queries, uniqueUsers: day.users.size, webQueries: day.webQueries, errors: day.errors })),
     byUser: [...byUserMap.values()].sort((a, b) => b.queries - a.queries),
-    recent: rows.slice(0, 100)
+    recent: rows.slice(0, 100),
+    recentFeedback: feedbackRows.slice(0, 100)
   };
 }
 
 export async function queryChatAnalytics(days = 7) {
-  const { days: boundedDays, rows } = await queryChatAnalyticsRows(days);
-  return summarizeAnalytics(rows, boundedDays);
+  const { days: boundedDays, rows, feedbackRows } = await queryChatAnalyticsRows(days);
+  return summarizeAnalytics(rows, boundedDays, feedbackRows);
 }
 
 function csvCell(value: string | number | boolean): string {

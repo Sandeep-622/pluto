@@ -1,11 +1,11 @@
 import type { HttpRequest, HttpResponseInit } from "@azure/functions";
 import { ReadableStream } from "node:stream/web";
-import { chatRequestSchema, type ChatEvent } from "../../src/lib/contract";
+import { chatRequestSchema, feedbackRequestSchema, type ChatEvent } from "../../src/lib/contract";
 import { getConfig } from "./server/config";
 import { reserveRequest } from "./server/limits";
 import { runChat, type ChatMetrics } from "./server/chat";
 import { verifyGoogleToken, type AuthenticatedUser } from "./server/auth";
-import { analyticsToCsv, queryChatAnalyticsRows, recordChatAnalytics, summarizeAnalytics } from "./server/analytics";
+import { analyticsToCsv, queryChatAnalyticsRows, recordChatAnalytics, recordFeedback, summarizeAnalytics } from "./server/analytics";
 
 type Dependencies = {
   getConfig: () => {
@@ -18,6 +18,7 @@ type Dependencies = {
   runChat: typeof runChat;
   verifyAuth?: typeof verifyGoogleToken;
   recordAnalytics?: typeof recordChatAnalytics;
+  recordFeedback?: typeof recordFeedback;
   queryAnalyticsRows?: typeof queryChatAnalyticsRows;
 };
 
@@ -69,10 +70,12 @@ export function createHandlers(dependencies: Dependencies = {
   runChat,
   verifyAuth: verifyGoogleToken,
   recordAnalytics: recordChatAnalytics,
+  recordFeedback,
   queryAnalyticsRows: queryChatAnalyticsRows
 }) {
   const verifyAuth = dependencies.verifyAuth ?? verifyGoogleToken;
   const recordAnalytics = dependencies.recordAnalytics ?? recordChatAnalytics;
+  const saveFeedback = dependencies.recordFeedback ?? recordFeedback;
   const queryAnalyticsRows = dependencies.queryAnalyticsRows ?? queryChatAnalyticsRows;
 
   async function authenticate(request: HttpRequest, clientId: string, headers: Record<string, string>): Promise<{ user: AuthenticatedUser } | { response: HttpResponseInit }> {
@@ -86,11 +89,11 @@ export function createHandlers(dependencies: Dependencies = {
     }
   }
 
-  async function handle(request: HttpRequest, kind: "chat" | "health" | "analytics"): Promise<HttpResponseInit> {
+  async function handle(request: HttpRequest, kind: "chat" | "health" | "analytics" | "feedback"): Promise<HttpResponseInit> {
     const result = originHeaders(request);
     if ("response" in result) return result.response;
     const { headers } = result;
-    const isPost = kind === "chat";
+    const isPost = kind === "chat" || kind === "feedback";
     const needsAuthHeaders = kind !== "health";
     if (request.method === "OPTIONS") {
       const method = request.headers.get("access-control-request-method");
@@ -119,7 +122,7 @@ export function createHandlers(dependencies: Dependencies = {
       const rawDays = Number(url.searchParams.get("days") ?? "7");
       const days = Number.isFinite(rawDays) ? rawDays : 7;
       try {
-        const { days: boundedDays, rows } = await queryAnalyticsRows(days);
+        const { days: boundedDays, rows, feedbackRows } = await queryAnalyticsRows(days);
         if (url.searchParams.get("format") === "csv") {
           return {
             status: 200,
@@ -131,10 +134,30 @@ export function createHandlers(dependencies: Dependencies = {
             body: analyticsToCsv(rows)
           };
         }
-        return { status: 200, headers, jsonBody: summarizeAnalytics(rows, boundedDays) };
+        return { status: 200, headers, jsonBody: summarizeAnalytics(rows, boundedDays, feedbackRows) };
       } catch {
         return { status: 503, headers, jsonBody: { error: "Analytics storage is unavailable." } };
       }
+    }
+
+    if (kind === "feedback") {
+      const authResult = await authenticate(request, config.GOOGLE_CLIENT_ID, headers);
+      if ("response" in authResult) return authResult.response;
+      if (!request.headers.get("content-type")?.includes("application/json")) return { status: 415, headers, jsonBody: { error: "Send a JSON request." } };
+      let raw: unknown;
+      try { raw = await readBody(request); } catch {
+        return { status: 400, headers, jsonBody: { error: "Invalid feedback request." } };
+      }
+      const parsed = feedbackRequestSchema.safeParse(raw);
+      if (!parsed.success) return { status: 400, headers, jsonBody: { error: "Invalid feedback payload." } };
+      await saveFeedback({
+        userSub: authResult.user.sub,
+        userEmail: authResult.user.email,
+        messageId: parsed.data.messageId,
+        feedback: parsed.data.feedback,
+        includeWeb: parsed.data.includeWeb
+      });
+      return { status: 200, headers, jsonBody: { ok: true, feedback: parsed.data.feedback } };
     }
 
     if (config.CHAT_ENABLED !== "true") return { status: 503, headers, jsonBody: { error: "This demo is paused by its administrator." } };
@@ -202,6 +225,7 @@ export function createHandlers(dependencies: Dependencies = {
   return {
     chat: (request: HttpRequest) => handle(request, "chat"),
     health: (request: HttpRequest) => handle(request, "health"),
-    analytics: (request: HttpRequest) => handle(request, "analytics")
+    analytics: (request: HttpRequest) => handle(request, "analytics"),
+    feedback: (request: HttpRequest) => handle(request, "feedback")
   };
 }

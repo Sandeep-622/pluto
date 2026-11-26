@@ -170,6 +170,12 @@ a.source-card:hover { border-color: #8ba774; }
 .account-meta small { font-size: 9px; color: #7f8d79; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sign-out { display: inline-flex; align-items: center; gap: 6px; width: fit-content; background: #e5ece0; color: #345441; font-size: 10px; font-weight: 500; padding: 5px 9px; border-radius: 5px; }
 .sign-out:hover { background: #d8e3d0; }
+.feedback-bar { display: flex; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.feedback-btn { display: inline-flex; align-items: center; gap: 5px; background: #f6f8f1; border: 1px solid #e2e8dc; color: #5f7154; font-size: 11px; padding: 5px 10px; border-radius: 6px; }
+.feedback-btn:hover { border-color: #9bb189; background: #eef3e8; }
+.feedback-btn.active.helpful { background: #e1ede3; border-color: #487357; color: #244736; font-weight: 500; }
+.feedback-btn.active.not-helpful { background: #f9ece8; border-color: #c27c68; color: #8c4632; font-weight: 500; }
+.feedback-thanks { font-size: 10px; color: #819278; margin-left: 2px; }
 .mobile-menu, .sidebar-overlay { display: none; }
 .icon-button { background: none; color: var(--ink); padding: 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border-width: 0; }

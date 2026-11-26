@@ -14,6 +14,7 @@ const reserve = vi.fn(() => release);
 const getConfig = vi.fn(config);
 const verifyAuth = vi.fn(async () => ({ sub: "google-user-123", email: "reader@example.com", name: "Reader" }));
 const recordAnalytics = vi.fn(async () => undefined);
+const recordFeedback = vi.fn(async () => undefined);
 const queryAnalyticsRows = vi.fn(async () => ({
   days: 7,
   rows: [{
@@ -30,9 +31,20 @@ const queryAnalyticsRows = vi.fn(async () => ({
     inputTokens: 100,
     outputTokens: 40,
     createdAt: "2026-11-25T12:00:00.000Z"
+  }],
+  feedbackRows: [{
+    partitionKey: "google-user-123",
+    rowKey: "msg-1",
+    userSub: "google-user-123",
+    userEmail: "reader@example.com",
+    messageId: "msg-1",
+    feedback: "helpful" as const,
+    includeWeb: false,
+    date: "2026-11-25",
+    updatedAt: "2026-11-25T12:01:00.000Z"
   }]
 }));
-const handlers = createHandlers({ runChat: model, reserveRequest: reserve, getConfig, verifyAuth, recordAnalytics, queryAnalyticsRows });
+const handlers = createHandlers({ runChat: model, reserveRequest: reserve, getConfig, verifyAuth, recordAnalytics, recordFeedback, queryAnalyticsRows });
 
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new HttpRequest({
@@ -197,5 +209,38 @@ describe("Functions request boundary", () => {
     expect(adminCsv.status).toBe(200);
     expect(adminCsv.headers).toMatchObject({ "Content-Type": "text/csv; charset=utf-8" });
     expect(await new HttpResponse(adminCsv).text()).toContain("reader@example.com");
+  });
+
+  it("requires auth and validates payloads on POST /api/feedback", async () => {
+    const unauth = await handlers.feedback(new HttpRequest({
+      url: "http://localhost:7071/api/feedback",
+      method: "POST",
+      headers: { origin: "http://localhost:3201", "content-type": "application/json" },
+      body: { string: JSON.stringify({ messageId: "msg-1", feedback: "helpful" }) }
+    }));
+    expect(unauth.status).toBe(401);
+
+    const bad = await handlers.feedback(new HttpRequest({
+      url: "http://localhost:7071/api/feedback",
+      method: "POST",
+      headers: { origin: "http://localhost:3201", "content-type": "application/json", authorization: "Bearer valid-test-token" },
+      body: { string: JSON.stringify({ messageId: "msg-1", feedback: "awesome" }) }
+    }));
+    expect(bad.status).toBe(400);
+
+    const ok = await handlers.feedback(new HttpRequest({
+      url: "http://localhost:7071/api/feedback",
+      method: "POST",
+      headers: { origin: "http://localhost:3201", "content-type": "application/json", authorization: "Bearer valid-test-token" },
+      body: { string: JSON.stringify({ messageId: "msg-1", feedback: "not_helpful", includeWeb: true }) }
+    }));
+    expect(ok.status).toBe(200);
+    expect(recordFeedback).toHaveBeenCalledWith({
+      userSub: "google-user-123",
+      userEmail: "reader@example.com",
+      messageId: "msg-1",
+      feedback: "not_helpful",
+      includeWeb: true
+    });
   });
 });

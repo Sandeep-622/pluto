@@ -43,6 +43,8 @@ if (process.argv.includes("--serve")) {
     await delay(3300);
     const cancellationPropagated = (await host.events()).includes("aborted");
 
+    const feedbackRes = await fetch(`${base}/feedback`, { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer test-google-token" }, body: '{"messageId":"host-msg-1","feedback":"helpful","includeWeb":false}' });
+    assert.equal(feedbackRes.status, 200);
     const analyticsUnauth = await fetch(`${base}/analytics`, { headers: { origin } });
     assert.equal(analyticsUnauth.status, 401);
     const analyticsForbidden = await fetch(`${base}/analytics`, { headers: { origin, authorization: "Bearer non-admin-token" } });
@@ -52,6 +54,7 @@ if (process.argv.includes("--serve")) {
     const report = await analyticsJson.json();
     assert.ok(report.summary.totalQueries >= 1);
     assert.ok(report.summary.totalInputTokens >= 120);
+    assert.ok(report.summary.helpfulCount >= 1);
     const analyticsCsv = await fetch(`${base}/analytics?days=1&format=csv`, { headers: { origin, authorization: "Bearer test-google-token" } });
     assert.equal(analyticsCsv.status, 200);
     assert.ok((await analyticsCsv.text()).includes("userEmail"));

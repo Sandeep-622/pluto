@@ -36,7 +36,30 @@ describe("analytics aggregation and CSV export", () => {
   ];
 
   it("summarizes counts, unique users, tokens, and daily breakdowns", () => {
-    const report = summarizeAnalytics(rows, 7);
+    const report = summarizeAnalytics(rows, 7, [
+      {
+        partitionKey: "u1",
+        rowKey: "msg-1",
+        userSub: "u1",
+        userEmail: "alice@example.com",
+        messageId: "msg-1",
+        feedback: "helpful",
+        includeWeb: true,
+        date: "2026-11-25",
+        updatedAt: "2026-11-25T10:05:00.000Z"
+      },
+      {
+        partitionKey: "u2",
+        rowKey: "msg-2",
+        userSub: "u2",
+        userEmail: "bob@example.com",
+        messageId: "msg-2",
+        feedback: "not_helpful",
+        includeWeb: false,
+        date: "2026-11-25",
+        updatedAt: "2026-11-25T09:05:00.000Z"
+      }
+    ]);
     expect(report.summary).toEqual({
       totalQueries: 2,
       uniqueUsers: 2,
@@ -46,10 +69,13 @@ describe("analytics aggregation and CSV export", () => {
       abortedCount: 0,
       totalInputTokens: 200,
       totalOutputTokens: 80,
-      avgDurationMs: 300
+      avgDurationMs: 300,
+      helpfulCount: 1,
+      notHelpfulCount: 1
     });
     expect(report.byDay).toEqual([{ date: "2026-11-25", queries: 2, uniqueUsers: 2, webQueries: 1, errors: 1 }]);
     expect(report.byUser).toHaveLength(2);
+    expect(report.recentFeedback).toHaveLength(2);
   });
 
   it("escapes CSV cells and prevents spreadsheet formula injection", () => {

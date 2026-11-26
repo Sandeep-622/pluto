@@ -28,6 +28,16 @@ export const chatRequestSchema = z.object({
 }).strict();
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 
+export const feedbackValueSchema = z.enum(["helpful", "not_helpful"]);
+export type FeedbackValue = z.infer<typeof feedbackValueSchema>;
+
+export const feedbackRequestSchema = z.object({
+  messageId: z.string().min(1).max(100),
+  feedback: feedbackValueSchema,
+  includeWeb: z.boolean().default(false)
+}).strict();
+export type FeedbackRequest = z.infer<typeof feedbackRequestSchema>;
+
 export const streamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("start"), section: sectionSchema }),
   z.object({ type: z.literal("delta"), section: sectionSchema, text: z.string() }),
