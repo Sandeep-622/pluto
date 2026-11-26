@@ -7,8 +7,8 @@ import { historyKey, requestHistory, restoreHistory, type Conversation, type Mes
 import { readChatStream } from "@/lib/stream";
 import { apiUrl } from "@/lib/api";
 import { Answer } from "./answer";
-import { GoogleSignInButton } from "./google-auth";
 import { Icon, PlutoMark } from "./icon";
+import { LandingPage } from "./landing-page";
 
 const suggestions = [
   { label: "Understand a symptom", question: "What do the indexed books explain about the causes of headache?", icon: "chat" as const },
@@ -163,6 +163,7 @@ export function ChatApp() {
       if (response.status === 401) {
         try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
         setAuth(null);
+        setQuestion(trimmed);
       }
       await readChatStream(response, (event) => updateAnswer(id, messageId, (message) => applyEvent(message, event)));
     } catch (failure) {
@@ -175,6 +176,21 @@ export function ChatApp() {
           : [{ kind: "books", text: "", sources: [], status: stopped ? "stopped" : "error", notice: message }]
       }));
     } finally { sending.current = false; abort.current = null; setBusy(false); textarea.current?.focus(); }
+  }
+
+  if (!ready) {
+    return <div className="landing-shell landing-loading" aria-busy="true">
+      <div className="brand"><PlutoMark /><span>pluto<span className="brand-dot">.</span></span></div>
+    </div>;
+  }
+
+  if (!auth) {
+    return <LandingPage
+      error={error}
+      onDismissError={() => setError("")}
+      onCredential={handleCredential}
+      onError={(message) => setError(message)}
+    />;
   }
 
   return <div className="app-shell">
@@ -225,20 +241,12 @@ export function ChatApp() {
 
       <div className="composer-area">
         {error && <div className="request-error" role="alert">{error}<button aria-label="Dismiss message" onClick={() => setError("")}><Icon name="close" size={14}/></button></div>}
-        {ready && !auth ? <div className="auth-gate">
-          <div className="auth-gate-copy">
-            <strong>Sign in with Google to ask questions</strong>
-            <span>Any Google account is welcome. Your saved conversations stay on this device.</span>
-          </div>
-          <GoogleSignInButton onCredential={handleCredential} onError={(message) => setError(message)} />
-        </div> : <>
-          <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-            <label className="sr-only" htmlFor="question">Your medical book question</label>
-            <textarea ref={textarea} id="question" placeholder="What would you like to understand?" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={2000} rows={2} disabled={busy} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }}/>
-            <div className="composer-toolbar"><div className="composer-tools"><span className="book-tool"><Icon name="book" size={15}/>Your books</span><span className="tool-separator"/><label className={`web-toggle ${includeWeb ? "enabled" : ""}`}><input type="checkbox" checked={includeWeb} disabled={busy || !webAvailable} onChange={(event) => setIncludeWeb(event.target.checked)}/><span className="toggle-track"/><Icon name="globe" size={15}/><span>Include web</span></label></div><div className="send-controls"><span className="character-count">{question.length > 1600 ? `${question.length}/2000` : ""}</span>{busy ? <button className="send-button stop-button" type="button" aria-label="Stop response" onClick={() => abort.current?.abort()}><Icon name="stop" size={17}/></button> : <button className="send-button" type="submit" disabled={!question.trim() || !ready} aria-label="Send question"><Icon name="arrow" size={20}/></button>}</div></div>
-          </form>
-          <p className="mode-help">{includeWeb ? "Web findings first, then your books. Web search costs extra and sends your question to a public-web service outside the Azure compliance boundary. Do not include patient details." : webAvailable ? "Book-only answers. Switch on web to add website findings before your book sources." : "Book-only answers. Web search is currently disabled by the administrator."}</p>
-        </>}
+        <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
+          <label className="sr-only" htmlFor="question">Your medical book question</label>
+          <textarea ref={textarea} id="question" placeholder="What would you like to understand?" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={2000} rows={2} disabled={busy} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }}/>
+          <div className="composer-toolbar"><div className="composer-tools"><span className="book-tool"><Icon name="book" size={15}/>Your books</span><span className="tool-separator"/><label className={`web-toggle ${includeWeb ? "enabled" : ""}`}><input type="checkbox" checked={includeWeb} disabled={busy || !webAvailable} onChange={(event) => setIncludeWeb(event.target.checked)}/><span className="toggle-track"/><Icon name="globe" size={15}/><span>Include web</span></label></div><div className="send-controls"><span className="character-count">{question.length > 1600 ? `${question.length}/2000` : ""}</span>{busy ? <button className="send-button stop-button" type="button" aria-label="Stop response" onClick={() => abort.current?.abort()}><Icon name="stop" size={17}/></button> : <button className="send-button" type="submit" disabled={!question.trim() || !ready} aria-label="Send question"><Icon name="arrow" size={20}/></button>}</div></div>
+        </form>
+        <p className="mode-help">{includeWeb ? "Web findings first, then your books. Web search costs extra and sends your question to a public-web service outside the Azure compliance boundary. Do not include patient details." : webAvailable ? "Book-only answers. Switch on web to add website findings before your book sources." : "Book-only answers. Web search is currently disabled by the administrator."}</p>
         <p className="disclaimer">For learning, not medical decisions. Sources may be incomplete or outdated. Don&apos;t enter identifiable patient information.</p>
       </div>
     </main>

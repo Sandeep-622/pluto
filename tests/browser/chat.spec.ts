@@ -53,18 +53,21 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/health", (route) => route.fulfill({ json: { status: "ok", webAvailable: true } }));
 });
 
-test("requires Google sign-in before chatting, persists session, and supports sign-out", async ({ page }) => {
+test("requires Google sign-in on the landing page before entering the app, persists session, and supports sign-out", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Sign in with Google to ask questions")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
   await expect(page.getByLabel("Your medical book question")).toHaveCount(0);
+  await expect(page.getByLabel("Saved conversations")).toHaveCount(0);
 
   await signIn(page);
   await expect(page.getByText("reader@example.com")).toBeVisible();
+  await expect(page.getByLabel("Saved conversations")).toBeVisible();
 
   await page.reload();
   await expect(page.getByLabel("Your medical book question")).toBeVisible();
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page.getByText("Sign in with Google to ask questions")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
+  await expect(page.getByLabel("Saved conversations")).toHaveCount(0);
 });
 
 test("book-only chat has citations and browser history, and can be cleared", async ({ page }) => {
