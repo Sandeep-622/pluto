@@ -2,11 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequest, HttpResponse } from "@azure/functions";
 import { createHandlers } from "@api/http";
 
-const config = (): { CHAT_ENABLED: "true" | "false"; ENABLE_WEB_SEARCH: "true" | "false"; GOOGLE_CLIENT_ID: string; ANALYTICS_ADMIN_EMAILS?: string } => ({
+const config = (): { CHAT_ENABLED: "true" | "false"; ENABLE_WEB_SEARCH: "true" | "false"; GOOGLE_CLIENT_ID: string } => ({
   CHAT_ENABLED: "true",
   ENABLE_WEB_SEARCH: "true",
-  GOOGLE_CLIENT_ID: "test-google-client-id",
-  ANALYTICS_ADMIN_EMAILS: "admin@example.com"
+  GOOGLE_CLIENT_ID: "test-google-client-id"
 });
 const model = vi.fn();
 const release = vi.fn();
@@ -15,36 +14,7 @@ const getConfig = vi.fn(config);
 const verifyAuth = vi.fn(async () => ({ sub: "google-user-123", email: "reader@example.com", name: "Reader" }));
 const recordAnalytics = vi.fn(async () => undefined);
 const recordFeedback = vi.fn(async () => undefined);
-const queryAnalyticsRows = vi.fn(async () => ({
-  days: 7,
-  rows: [{
-    partitionKey: "2026-11-25",
-    rowKey: "1-abc",
-    userSub: "google-user-123",
-    userEmail: "reader@example.com",
-    includeWeb: false,
-    questionLength: 10,
-    historyCount: 0,
-    status: "complete" as const,
-    durationMs: 250,
-    bookHits: 2,
-    inputTokens: 100,
-    outputTokens: 40,
-    createdAt: "2026-11-25T12:00:00.000Z"
-  }],
-  feedbackRows: [{
-    partitionKey: "google-user-123",
-    rowKey: "msg-1",
-    userSub: "google-user-123",
-    userEmail: "reader@example.com",
-    messageId: "msg-1",
-    feedback: "helpful" as const,
-    includeWeb: false,
-    date: "2026-11-25",
-    updatedAt: "2026-11-25T12:01:00.000Z"
-  }]
-}));
-const handlers = createHandlers({ runChat: model, reserveRequest: reserve, getConfig, verifyAuth, recordAnalytics, recordFeedback, queryAnalyticsRows });
+const handlers = createHandlers({ runChat: model, reserveRequest: reserve, getConfig, verifyAuth, recordAnalytics, recordFeedback });
 
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new HttpRequest({
@@ -163,12 +133,12 @@ describe("Functions request boundary", () => {
   });
 
   it("rejects busy requests before running a provider", async () => {
-    const busy = createHandlers({ runChat: model, reserveRequest: () => undefined, getConfig, verifyAuth, recordAnalytics, queryAnalyticsRows });
+    const busy = createHandlers({ runChat: model, reserveRequest: () => undefined, getConfig, verifyAuth, recordAnalytics, recordFeedback });
     expect((await busy.chat(request({ question: "hello" }))).status).toBe(429);
     expect(model).not.toHaveBeenCalled();
   });
 
-  it("records analytics after chat completes and restricts /api/analytics to admins", async () => {
+  it("records analytics after chat completes", async () => {
     model.mockImplementation(async (_request, emit, _signal, onMetrics) => {
       onMetrics?.({ bookHits: 3, inputTokens: 150, outputTokens: 60 });
       emit({ type: "done" });
@@ -183,32 +153,6 @@ describe("Functions request boundary", () => {
       inputTokens: 150,
       outputTokens: 60
     }));
-
-    const nonAdmin = await handlers.analytics(new HttpRequest({
-      url: "http://localhost:7071/api/analytics",
-      method: "GET",
-      headers: { origin: "http://localhost:3201", authorization: "Bearer valid-test-token" }
-    }));
-    expect(nonAdmin.status).toBe(403);
-
-    verifyAuth.mockResolvedValueOnce({ sub: "admin-1", email: "admin@example.com", name: "Admin" });
-    const adminJson = await handlers.analytics(new HttpRequest({
-      url: "http://localhost:7071/api/analytics?days=7",
-      method: "GET",
-      headers: { origin: "http://localhost:3201", authorization: "Bearer admin-token" }
-    }));
-    expect(adminJson.status).toBe(200);
-    expect((await new HttpResponse(adminJson).json() as { summary: { totalQueries: number } }).summary.totalQueries).toBe(1);
-
-    verifyAuth.mockResolvedValueOnce({ sub: "admin-1", email: "admin@example.com", name: "Admin" });
-    const adminCsv = await handlers.analytics(new HttpRequest({
-      url: "http://localhost:7071/api/analytics?format=csv",
-      method: "GET",
-      headers: { origin: "http://localhost:3201", authorization: "Bearer admin-token" }
-    }));
-    expect(adminCsv.status).toBe(200);
-    expect(adminCsv.headers).toMatchObject({ "Content-Type": "text/csv; charset=utf-8" });
-    expect(await new HttpResponse(adminCsv).text()).toContain("reader@example.com");
   });
 
   it("requires auth and validates payloads on POST /api/feedback", async () => {

@@ -5,21 +5,19 @@ import { getConfig } from "./server/config";
 import { reserveRequest } from "./server/limits";
 import { runChat, type ChatMetrics } from "./server/chat";
 import { verifyGoogleToken, type AuthenticatedUser } from "./server/auth";
-import { analyticsToCsv, queryChatAnalyticsRows, recordChatAnalytics, recordFeedback, summarizeAnalytics } from "./server/analytics";
+import { recordChatAnalytics, recordFeedback } from "./server/analytics";
 
 type Dependencies = {
   getConfig: () => {
     CHAT_ENABLED: "true" | "false";
     ENABLE_WEB_SEARCH: "true" | "false";
     GOOGLE_CLIENT_ID: string;
-    ANALYTICS_ADMIN_EMAILS?: string;
   };
   reserveRequest: typeof reserveRequest;
   runChat: typeof runChat;
   verifyAuth?: typeof verifyGoogleToken;
   recordAnalytics?: typeof recordChatAnalytics;
   recordFeedback?: typeof recordFeedback;
-  queryAnalyticsRows?: typeof queryChatAnalyticsRows;
 };
 
 function originHeaders(request: HttpRequest): { headers: Record<string, string> } | { response: HttpResponseInit } {
@@ -70,13 +68,11 @@ export function createHandlers(dependencies: Dependencies = {
   runChat,
   verifyAuth: verifyGoogleToken,
   recordAnalytics: recordChatAnalytics,
-  recordFeedback,
-  queryAnalyticsRows: queryChatAnalyticsRows
+  recordFeedback
 }) {
   const verifyAuth = dependencies.verifyAuth ?? verifyGoogleToken;
   const recordAnalytics = dependencies.recordAnalytics ?? recordChatAnalytics;
   const saveFeedback = dependencies.recordFeedback ?? recordFeedback;
-  const queryAnalyticsRows = dependencies.queryAnalyticsRows ?? queryChatAnalyticsRows;
 
   async function authenticate(request: HttpRequest, clientId: string, headers: Record<string, string>): Promise<{ user: AuthenticatedUser } | { response: HttpResponseInit }> {
     const authorization = request.headers.get("authorization");
@@ -89,7 +85,7 @@ export function createHandlers(dependencies: Dependencies = {
     }
   }
 
-  async function handle(request: HttpRequest, kind: "chat" | "health" | "analytics" | "feedback"): Promise<HttpResponseInit> {
+  async function handle(request: HttpRequest, kind: "chat" | "health" | "feedback"): Promise<HttpResponseInit> {
     const result = originHeaders(request);
     if ("response" in result) return result.response;
     const { headers } = result;
@@ -110,35 +106,6 @@ export function createHandlers(dependencies: Dependencies = {
       return { status: 503, headers, jsonBody: kind !== "health" ? { error: "The server is not configured. Contact the demo administrator." } : { status: "unconfigured", webAvailable: false } };
     }
     if (kind === "health") return { headers, jsonBody: { status: config.CHAT_ENABLED === "true" ? "ok" : "paused", webAvailable: config.ENABLE_WEB_SEARCH === "true" } };
-
-    if (kind === "analytics") {
-      const authResult = await authenticate(request, config.GOOGLE_CLIENT_ID, headers);
-      if ("response" in authResult) return authResult.response;
-      const admins = (config.ANALYTICS_ADMIN_EMAILS ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
-      if (!admins.includes(authResult.user.email.toLowerCase())) {
-        return { status: 403, headers, jsonBody: { error: "You are not authorized to view analytics." } };
-      }
-      const url = new URL(request.url);
-      const rawDays = Number(url.searchParams.get("days") ?? "7");
-      const days = Number.isFinite(rawDays) ? rawDays : 7;
-      try {
-        const { days: boundedDays, rows, feedbackRows } = await queryAnalyticsRows(days);
-        if (url.searchParams.get("format") === "csv") {
-          return {
-            status: 200,
-            headers: {
-              ...headers,
-              "Content-Type": "text/csv; charset=utf-8",
-              "Content-Disposition": 'attachment; filename="pluto-analytics.csv"'
-            },
-            body: analyticsToCsv(rows)
-          };
-        }
-        return { status: 200, headers, jsonBody: summarizeAnalytics(rows, boundedDays, feedbackRows) };
-      } catch {
-        return { status: 503, headers, jsonBody: { error: "Analytics storage is unavailable." } };
-      }
-    }
 
     if (kind === "feedback") {
       const authResult = await authenticate(request, config.GOOGLE_CLIENT_ID, headers);
@@ -225,7 +192,6 @@ export function createHandlers(dependencies: Dependencies = {
   return {
     chat: (request: HttpRequest) => handle(request, "chat"),
     health: (request: HttpRequest) => handle(request, "health"),
-    analytics: (request: HttpRequest) => handle(request, "analytics"),
     feedback: (request: HttpRequest) => handle(request, "feedback")
   };
 }
