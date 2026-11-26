@@ -14,6 +14,7 @@
     "test:azure": "node --env-file=.env scripts/azure-smoke.mjs"
   },
   "dependencies": {
+    "@azure/data-tables": "^13.3.2",
     "@azure/functions": "4.17.1",
     "google-auth-library": "^11.3.4",
     "openai": "7.57.0",

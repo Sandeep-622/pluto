@@ -42,7 +42,21 @@ if (process.argv.includes("--serve")) {
     controller.abort();
     await delay(3300);
     const cancellationPropagated = (await host.events()).includes("aborted");
-    console.log(JSON.stringify({ host: "Core Tools v4", health: "passed", cors: "passed", invalidInput: "passed", incrementalStreaming: "passed", disconnectAbortsGeneration: cancellationPropagated, azureCalls: 0 }));
+
+    const analyticsUnauth = await fetch(`${base}/analytics`, { headers: { origin } });
+    assert.equal(analyticsUnauth.status, 401);
+    const analyticsForbidden = await fetch(`${base}/analytics`, { headers: { origin, authorization: "Bearer non-admin-token" } });
+    assert.equal(analyticsForbidden.status, 403);
+    const analyticsJson = await fetch(`${base}/analytics?days=1`, { headers: { origin, authorization: "Bearer test-google-token" } });
+    assert.equal(analyticsJson.status, 200);
+    const report = await analyticsJson.json();
+    assert.ok(report.summary.totalQueries >= 1);
+    assert.ok(report.summary.totalInputTokens >= 120);
+    const analyticsCsv = await fetch(`${base}/analytics?days=1&format=csv`, { headers: { origin, authorization: "Bearer test-google-token" } });
+    assert.equal(analyticsCsv.status, 200);
+    assert.ok((await analyticsCsv.text()).includes("userEmail"));
+
+    console.log(JSON.stringify({ host: "Core Tools v4", health: "passed", cors: "passed", invalidInput: "passed", incrementalStreaming: "passed", analyticsTableStorage: "passed", disconnectAbortsGeneration: cancellationPropagated, azureCalls: 0 }));
     if (!cancellationPropagated) console.warn("The local Functions transport did not propagate a client disconnect; server work remains bounded by its deadline.");
   } finally { await host.stop(); }
 }

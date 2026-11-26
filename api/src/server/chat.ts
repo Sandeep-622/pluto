@@ -3,17 +3,38 @@ import { getConfig } from "./config";
 import { retrieveBooks } from "./search";
 import { streamModel } from "./openai";
 
-export async function runChat(request: ChatRequest, emit: (event: ChatEvent) => void, signal: AbortSignal) {
+export type ChatMetrics = {
+  bookHits: number;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+export async function runChat(
+  request: ChatRequest,
+  emit: (event: ChatEvent) => void,
+  signal: AbortSignal,
+  onMetrics?: (metrics: Partial<ChatMetrics>) => void
+) {
   const config = getConfig();
+  let inputTokens = 0;
+  let outputTokens = 0;
+  const addUsage = (usage: { inputTokens: number; outputTokens: number }) => {
+    inputTokens += usage.inputTokens;
+    outputTokens += usage.outputTokens;
+    onMetrics?.({ inputTokens, outputTokens });
+  };
   const retrieval = retrieveBooks(request, signal).then(
-    (evidence) => ({ ok: true as const, evidence }),
+    (evidence) => {
+      onMetrics?.({ bookHits: evidence.length });
+      return { ok: true as const, evidence };
+    },
     (error: unknown) => ({ ok: false as const, error })
   );
   if (request.includeWeb) {
     emit({ type: "start", section: "web" });
     try {
       if (config.ENABLE_WEB_SEARCH !== "true") throw new Error("Web search is disabled by the demo administrator.");
-      await streamModel(request, [], true, emit, AbortSignal.any([signal, AbortSignal.timeout(90000)]));
+      await streamModel(request, [], true, emit, AbortSignal.any([signal, AbortSignal.timeout(90000)]), addUsage);
       emit({ type: "section-done", section: "web" });
     } catch (error) {
       if (signal.aborted) throw error;
@@ -29,7 +50,7 @@ export async function runChat(request: ChatRequest, emit: (event: ChatEvent) => 
     if (result.evidence.length === 0) {
       emit({ type: "delta", section: "books", text: "I couldn't find readable supporting passages in the indexed books. Try a more specific book-related question. No answer has been filled in from general model knowledge." });
     } else {
-      await streamModel(request, result.evidence, false, emit, AbortSignal.any([signal, AbortSignal.timeout(90000)]));
+      await streamModel(request, result.evidence, false, emit, AbortSignal.any([signal, AbortSignal.timeout(90000)]), addUsage);
     }
     emit({ type: "section-done", section: "books" });
   } catch (error) {

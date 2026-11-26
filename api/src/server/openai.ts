@@ -25,7 +25,14 @@ export function modelRequest(request: ChatRequest, evidence: Evidence[], web: bo
   };
 }
 
-export async function streamModel(request: ChatRequest, evidence: Evidence[], web: boolean, emit: Emit, signal: AbortSignal) {
+export async function streamModel(
+  request: ChatRequest,
+  evidence: Evidence[],
+  web: boolean,
+  emit: Emit,
+  signal: AbortSignal,
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void
+) {
   const config = getConfig();
   const client = new OpenAI({
     baseURL: `${config.AZURE_OPENAI_ENDPOINT.replace(/\/$/, "")}/openai/v1/`,
@@ -45,6 +52,10 @@ export async function streamModel(request: ChatRequest, evidence: Evidence[], we
       emit({ type: "delta", section, text: event.delta });
     } else if (event.type === "response.completed") {
       completed = true;
+      onUsage?.({
+        inputTokens: event.response.usage?.input_tokens ?? 0,
+        outputTokens: event.response.usage?.output_tokens ?? 0
+      });
       for (const item of event.response.output) {
         if (item.type === "web_search_call" && item.status === "completed") searched = true;
         if (item.type !== "message") continue;
