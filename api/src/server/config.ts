@@ -9,7 +9,8 @@ const configSchema = z.object({
   AZURE_SEARCH_INDEX: z.string().regex(/^[a-z0-9][a-z0-9_-]*$/),
   AZURE_SEARCH_API_VERSION: z.string().default("2026-08-01-preview"),
   ENABLE_WEB_SEARCH: z.enum(["true", "false"]).default("false"),
-  CHAT_ENABLED: z.enum(["true", "false"]).default("true")
+  CHAT_ENABLED: z.enum(["true", "false"]).default("true"),
+  GOOGLE_CLIENT_ID: z.string().min(10)
 });
 
 export function getConfig() {

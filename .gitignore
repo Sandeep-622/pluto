@@ -7,6 +7,7 @@ test-results/
 .env
 .env.*
 !.env.example
+client_secret_*.json
 *.tsbuildinfo
 npm-debug.log*
 .DS_Store

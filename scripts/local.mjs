@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { stopChild } from "../api/scripts/process.mjs";
 
 if (Number(process.versions.node.split(".")[0]) !== 24) throw new Error("Use Node.js 24 for the frontend and Functions host.");
+if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const root = fileURLToPath(new URL("..", import.meta.url));
 for (const port of [3201, 7071]) {
   await new Promise((resolve, reject) => {

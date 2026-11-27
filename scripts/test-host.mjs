@@ -13,15 +13,19 @@ if (process.argv.includes("--serve")) {
     const health = await fetch(`${base}/health`, { headers: { origin } });
     assert.equal(health.headers.get("access-control-allow-origin"), origin);
     assert.equal((await health.json()).status, "ok");
-    const preflight = await fetch(`${base}/chat`, { method: "OPTIONS", headers: { origin, "access-control-request-method": "POST", "access-control-request-headers": "content-type" } });
+    const preflight = await fetch(`${base}/chat`, { method: "OPTIONS", headers: { origin, "access-control-request-method": "POST", "access-control-request-headers": "content-type, authorization" } });
     assert.equal(preflight.status, 204);
     assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
-    const badOrigin = await fetch(`${base}/chat`, { method: "POST", headers: { origin: "https://untrusted.example", "content-type": "application/json" }, body: '{"question":"hello"}' });
+    const badOrigin = await fetch(`${base}/chat`, { method: "POST", headers: { origin: "https://untrusted.example", "content-type": "application/json", authorization: "Bearer test-google-token" }, body: '{"question":"hello"}' });
     assert.equal(badOrigin.status, 403);
     assert.equal(badOrigin.headers.get("access-control-allow-origin"), null);
-    const invalid = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: '{"question":""}' });
+    const unauthenticated = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: '{"question":"hello"}' });
+    assert.equal(unauthenticated.status, 401);
+    const badToken = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer invalid-token" }, body: '{"question":"hello"}' });
+    assert.equal(badToken.status, 401);
+    const invalid = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer test-google-token" }, body: '{"question":""}' });
     assert.equal(invalid.status, 400);
-    const response = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: '{"question":"stream"}' });
+    const response = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer test-google-token" }, body: '{"question":"stream"}' });
     const reader = response.body.getReader();
     let content = new TextDecoder().decode((await reader.read()).value);
     assert.ok(content.includes('"type":"start"'));
@@ -33,7 +37,7 @@ if (process.argv.includes("--serve")) {
     }
     assert.ok(content.includes('"type":"done"'));
     const controller = new AbortController();
-    const slow = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: '{"question":"slow"}', signal: controller.signal });
+    const slow = await fetch(`${base}/chat`, { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer test-google-token" }, body: '{"question":"slow"}', signal: controller.signal });
     await slow.body.getReader().read();
     controller.abort();
     await delay(3300);
