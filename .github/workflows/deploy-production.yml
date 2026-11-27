@@ -1,0 +1,166 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    name: Build release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_API_BASE_URL: ${{ vars.NEXT_PUBLIC_API_BASE_URL }}
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${{ vars.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+    steps:
+      - name: Require main
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') {
+            throw 'Production releases must run from main.'
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            api/package-lock.json
+      - name: Install build dependencies
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
+          npm --prefix api ci
+          if ($LASTEXITCODE -ne 0) { throw 'API dependency installation failed.' }
+      - name: Build frontend and API
+        run: |
+          npm run build:api
+          if ($LASTEXITCODE -ne 0) { throw 'API build failed.' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+      - name: Package release
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'pluto-api-stage'
+          $release = Join-Path $env:RUNNER_TEMP 'pluto-release'
+          New-Item -ItemType Directory -Path $stage, $release | Out-Null
+          Copy-Item (Join-Path 'api' 'dist') -Destination $stage -Recurse
+          foreach ($file in @('package.json', 'package-lock.json', 'host.json')) {
+            Copy-Item (Join-Path 'api' $file) -Destination (Join-Path $stage $file)
+          }
+          Push-Location $stage
+          try {
+            npm ci --omit=dev
+            if ($LASTEXITCODE -ne 0) { throw 'Production dependency installation failed.' }
+          } finally {
+            Pop-Location
+          }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($stage, (Join-Path $release 'api.zip'))
+          Copy-Item 'out' -Destination (Join-Path $release 'site') -Recurse
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pluto-release-${{ github.sha }}
+          path: ${{ runner.temp }}/pluto-release
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  deploy:
+    name: Publish production
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ vars.PLUTO_FRONTEND_URL }}
+    concurrency:
+      group: pluto-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_FUNCTION_APP_NAME: ${{ vars.AZURE_FUNCTION_APP_NAME }}
+      AZURE_STATIC_WEB_APP_NAME: ${{ vars.AZURE_STATIC_WEB_APP_NAME }}
+    steps:
+      - name: Confirm release is still current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $head = gh api "repos/$env:GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read current main.' }
+          if ($head -ne $env:GITHUB_SHA) {
+            throw 'main changed after this release was built. Approve or rerun the latest main workflow instead.'
+          }
+          foreach ($name in @('AZURE_RESOURCE_GROUP', 'AZURE_FUNCTION_APP_NAME', 'AZURE_STATIC_WEB_APP_NAME')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing production variable: $name"
+            }
+          }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pluto-release-${{ github.sha }}
+          path: ${{ runner.temp }}/pluto-release
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install static publisher
+        run: |
+          npx --yes @azure/static-web-apps-cli@2.1.0 --version
+          if ($LASTEXITCODE -ne 0) { throw 'Static publisher installation failed.' }
+      - uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+      - name: Publish Function App
+        run: |
+          $zip = Join-Path (Join-Path $env:RUNNER_TEMP 'pluto-release') 'api.zip'
+          az functionapp deployment source config-zip `
+            --name $env:AZURE_FUNCTION_APP_NAME `
+            --resource-group $env:AZURE_RESOURCE_GROUP `
+            --src $zip --build-remote false --output none
+          if ($LASTEXITCODE -ne 0) { throw 'Function App deployment failed.' }
+      - name: Publish Static Web App
+        working-directory: ${{ runner.temp }}/pluto-release
+        run: |
+          $token = az staticwebapp secrets list `
+            --name $env:AZURE_STATIC_WEB_APP_NAME `
+            --resource-group $env:AZURE_RESOURCE_GROUP `
+            --query properties.apiKey --output tsv
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($token)) {
+            throw 'Could not retrieve the static deployment token.'
+          }
+          Write-Output "::add-mask::$token"
+          $env:SWA_CLI_DEPLOYMENT_TOKEN = $token
+          try {
+            $site = Join-Path $env:RUNNER_TEMP 'pluto-release' 'site'
+            npx --yes @azure/static-web-apps-cli@2.1.0 deploy $site `
+              --swa-config-location $site --env production
+            if ($LASTEXITCODE -ne 0) { throw 'Static frontend deployment failed.' }
+          } finally {
+            Remove-Item Env:\SWA_CLI_DEPLOYMENT_TOKEN -ErrorAction SilentlyContinue
+            $token = $null
+          }
+      - name: Record deployment
+        env:
+          FRONTEND_URL: ${{ vars.PLUTO_FRONTEND_URL }}
+        run: |
+          @"
+          Deployed commit $env:GITHUB_SHA to [$env:FRONTEND_URL]($env:FRONTEND_URL).
+
+          Correctness checks and real sign-in/chat validation are manual.
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append

@@ -1,12 +1,12 @@
 # Pluto
 
-A medical-book study chatbot with a **static Next.js/React frontend** and a separate **TypeScript Azure Functions API**. The intended Azure hosts are **Static Web Apps Free** and **Functions Flex Consumption**. Cloud deployment is deferred until the local split is validated.
+A medical-book study chatbot with a **static Next.js/React frontend** and a separate **TypeScript Azure Functions API**, hosted on **Static Web Apps Free** and **Functions Flex Consumption**.
 
 ## Behavior
 
 - **Book only (default):** hybrid keyword/vector retrieval, streamed book-grounded answers, and book-title citations.
 - **Include web (opt-in):** website findings/citations appear first, followed by separate book findings/citations. Book passages are not sent to web search.
-- Browser-local conversations, new chat, deletion/clear, and stop-response controls. No login, database, or document uploader.
+- Google sign-in, browser-local conversations, new chat, deletion/clear, and stop-response controls. No database or document uploader.
 
 This educational PoC is not for diagnosis or prescribing. Sources can be incomplete, incorrect, or outdated. Do not enter identifiable patient information. The hosting refactor does not change the medical prompts, evidence limits, or model token budgets.
 
@@ -35,7 +35,7 @@ Copy-Item api\.env.example api\.env
 
 **Do not overwrite existing environment files.** When upgrading from the original application, move the ignored root `.env` to `api\.env` first; the frontend no longer needs those credentials.
 
-The only frontend build setting is `NEXT_PUBLIC_API_BASE_URL`, normally `http://localhost:7071` locally. Set it to the API's HTTPS **origin**, without `/api`, query parameters, or credentials. Changing it requires rebuilding the static site.
+Frontend build settings are `NEXT_PUBLIC_API_BASE_URL`, normally `http://localhost:7071` locally, and `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, the public Google OAuth web client ID. Set the API URL to its HTTPS **origin** in production, without `/api`, query parameters, or credentials. Changing either setting requires rebuilding the static site.
 
 Configure these server-only settings in `api\.env`:
 
@@ -50,9 +50,10 @@ Configure these server-only settings in `api\.env`:
 | `AZURE_SEARCH_API_VERSION` | Serverless-compatible version, currently `2026-08-01-preview` |
 | `ENABLE_WEB_SEARCH` | Server capability switch; UI toggle still starts off |
 | `CHAT_ENABLED` | Set `false` to pause chat |
+| `GOOGLE_CLIENT_ID` | Google web client ID; must match the frontend's client ID |
 | `ALLOWED_ORIGINS` | Comma-separated exact frontend origins, without trailing slashes |
 
-The local API launcher defaults allowed origins to `http://localhost:3201,http://127.0.0.1:3201`. The production handler requires explicit configuration. CORS is not authentication: the anonymous API can still be called by nonbrowser clients. Never expose a Function key or Azure resource key in frontend code.
+The local API launcher defaults allowed origins to `http://localhost:3201,http://127.0.0.1:3201`. The production handler requires explicit configuration and verifies Google ID tokens before running chat. CORS is not authentication. Never expose a Function key or Azure resource key in frontend code. Add the frontend origins you use to the Google client's Authorized JavaScript origins.
 
 The local launcher starts **Azurite on loopback ports 10010-10012** for Functions host storage, using an ephemeral local-only credential. This resolves the current Core Tools host's storage-health requirement without connecting to Azure Storage. The emulator data stays in ignored `api\.local-storage` (or `api\.test-host` during tests), and the launcher stops it with the API. Optional ingestion credentials retained in an existing environment file are not used by chat. Environment files, emulator data, and `api\local.settings.json` are ignored/excluded from packaging.
 
@@ -87,7 +88,7 @@ Install Chromium with `npx playwright install chromium` only if the browser runn
 
 The focused tests mock provider calls. Host integration tests use **real Core Tools v4** with a separate test-only entrypoint, synthetic answers, and blocked external provider fetches. Browser tests serve `out` on port 3100 and call the test Functions host on port 7071. They need no Azure credentials. Test fixtures never enter the production API build or deployment package; there is no production mock-mode switch.
 
-The current stable Core Tools/Azurite development dependency trees report npm advisories (including Core Tools' archive-extraction dependency). These tools are local-only, Azurite binds to loopback, and production installation must omit development dependencies. Do not apply `npm audit fix --force` blindly: its suggested changes include preview Core Tools and an older major Azurite. Recheck supported tool updates before establishing CI/CD.
+The current stable Core Tools/Azurite development dependency trees report npm advisories (including Core Tools' archive-extraction dependency). These are development/build-only dependencies, Azurite binds to loopback, and production installation must omit development dependencies. Do not apply `npm audit fix --force` blindly: its suggested changes include preview Core Tools and an older major Azurite. Review supported tool updates separately from deployment setup.
 
 Coverage includes input/body limits, exact-origin CORS/preflight, failure/paused states, real incremental HTTP streaming, stream cancellation/deadlines, book/web provenance, citations, history, and browser stop behavior. Local verification does not establish future Azure-hosted behavior.
 
@@ -110,17 +111,52 @@ Web search uses a separate bounded Responses call only when requested. It requir
 - Four active requests and eight accepted requests/minute **per worker's shared demo bucket**. Forwarded-IP headers are not trusted. Limits reset on restart and are not distributed or a hard spending cap.
 - Questions: 2,000 characters; retrieval: 15 candidates, up to five readable passages and 16,000 evidence characters. Existing output budgets include reasoning tokens.
 - Up to 30 browser-local conversations and 100 messages/chat. Clearing site data removes history. Browser-only persistence is not a promise of zero provider-side processing/retention.
-- No automatic generation retries, authentication, durable history, uploads, agent framework, or production infrastructure.
+- No automatic generation retries, durable server-side history, uploads, or agent framework.
 
-## Cloud deployment: pending manual validation
+## GitHub Actions deployment
 
-No Azure hosting resources are provisioned by this branch. After local user validation, separately approve deployment, region/runtime availability, pricing, and credential/privacy changes.
+`.github\workflows\deploy-production.yml` is a **deployment-only** workflow. It runs when `main` changes, or through **Actions > Deploy production > Run workflow** with `main` selected. It does not run lint, unit, browser, host, or billable model/Search tests, and does not make CI a merge requirement. Perform correctness checks yourself before approving publication.
 
-The frontend deployment artifact is **only `out`**, including `staticwebapp.config.json`. Use Static Web Apps Free without an integrated/linked API. The backend is an independent Functions v4 app: build `api`, package `dist`, `host.json`, its package/lockfile and production dependencies (or an agreed remote Linux install), and configure secrets plus exact UI origins in Function App settings. Do not upload `.env`, local settings, Windows tools, test fixtures, or the root Next.js application. Build/install for Linux when targeting Flex Consumption.
+The workflow builds with Node 24 on Ubuntu, creates the static export and an independent API ZIP with Linux-installed production dependencies, and retains the release artifact for 14 days. Normal compiler/build failures still stop the release. It never packages `.env`, local settings, test fixtures, development tools, or the root Next.js server into the API.
 
-Start with zero always-ready instances and explicitly bounded scale/concurrency when cloud hosting is approved. Free frontend hosting does not eliminate backend execution, monitoring, storage, bandwidth, model, web-search, or Search costs. Long streaming requests are billed while active; actual grant eligibility and prices need verification.
+The **Publish production** job waits for approval through the GitHub `production` environment. Publication is restricted to `main`; an older release fails explicitly if `main` changed while it was waiting. Deployments are serialized: `cancel-in-progress: false` protects a running publication, but the concurrency group allows only one pending publication. A newly queued publication cancels and replaces any existing pending publication; it does not interrupt the running one. Azure authentication uses short-lived OIDC tokens, not a stored Azure password or client secret.
 
-Before public sharing, coordinate rotation of credentials exposed in chat and review the previously blob-public source container. These changes are not performed by this local refactor. Distributed usage controls, hosted streaming/cancellation tests, CI/CD, and production readiness remain separate work.
+### Configuration
+
+Set these **repository Actions variables** under **Settings > Secrets and variables > Actions > Variables**:
+
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_API_BASE_URL` | Production Function App HTTPS origin |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Public Google web client ID, matching the API setting |
+| `PLUTO_FRONTEND_URL` | Production Static Web App HTTPS origin |
+
+Set these variables on the **production environment** under **Settings > Environments > production**:
+
+| Variable | Value |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Deployment application's client ID |
+| `AZURE_TENANT_ID` | Deployment application's tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Subscription containing the hosting resources |
+| `AZURE_RESOURCE_GROUP` | `Pluto` |
+| `AZURE_FUNCTION_APP_NAME` | `pluto-backend-fnc-app` |
+| `AZURE_STATIC_WEB_APP_NAME` | `pluto-frontend-web-app` |
+
+Configure `production` with the owner as a required reviewer and only the `main` branch permitted. Self-approval must remain allowed if the owner also triggers the release.
+
+The `pluto-github-actions` Entra application/service principal has an OIDC federated credential for this repository's **production environment**. Use the repository's actual subject prefix from the GitHub OIDC settings, followed by `:environment:production`: this repository uses immutable owner/repository IDs, not the older name-only prefix. The issuer is `https://token.actions.githubusercontent.com` and the audience is `api://AzureADTokenExchange`.
+
+The identity has **Website Contributor** only on the Function App and **Contributor** only on the Static Web App, not on the whole resource group or subscription. Static publication retrieves a deployment token at runtime, masks it and removes it from the process afterward. Azure OpenAI/Search credentials stay in Function App settings and are not GitHub workflow secrets.
+
+### Publishing and manual validation
+
+Merge the deployment workflow into `main`, let **Build release** finish, then use **Review deployments** to approve **Publish production** after your checks. The same release artifact is published to both hosts. The workflow changes application files only: it preserves existing Function App settings, including `CHAT_ENABLED`, provider keys, Google configuration, storage identity, CORS and scale settings.
+
+The backend and frontend publish sequentially, not atomically. If the frontend step fails after the backend succeeds, the job reports failure but does not automatically roll back either host. Inspect the failed step and rerun the latest `main` release when ready. For a code rollback, revert the change on `main` and approve the resulting release.
+
+After publishing, manually verify Google sign-in, a medical question, streaming, citations and any changed feature. The existing public frontend is https://icy-bay-09003b400.8.azurestaticapps.net and the API is https://pluto-backend-fnc-app.azurewebsites.net.
+
+No hosting resources are provisioned by this workflow. Static Web Apps Free does not eliminate backend execution, storage, bandwidth, model, web-search or Search costs. Credential rotation, book-storage permissions and distributed usage controls remain separate work.
 
 ## License
 
