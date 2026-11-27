@@ -119,7 +119,7 @@ Web search uses a separate bounded Responses call only when requested. It requir
 
 The workflow builds with Node 24 on Ubuntu, creates the static export and an independent API ZIP with Linux-installed production dependencies, and retains the release artifact for 14 days. Normal compiler/build failures still stop the release. It never packages `.env`, local settings, test fixtures, development tools, or the root Next.js server into the API.
 
-The **Publish production** job waits for approval through the GitHub `production` environment. Publication is restricted to `main`; an older release fails explicitly if `main` changed while it was waiting. Deployments are serialized and are not cancelled by a newer push. Azure authentication uses short-lived OIDC tokens, not a stored Azure password or client secret.
+The **Publish production** job waits for approval through the GitHub `production` environment. Publication is restricted to `main`; an older release fails explicitly if `main` changed while it was waiting. Deployments are serialized: `cancel-in-progress: false` protects a running publication, but the concurrency group allows only one pending publication. A newly queued publication cancels and replaces any existing pending publication; it does not interrupt the running one. Azure authentication uses short-lived OIDC tokens, not a stored Azure password or client secret.
 
 ### Configuration
 
