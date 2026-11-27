@@ -2,10 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { type ChatEvent, type AnswerSection } from "@/lib/contract";
+import { authStorageKey, isAuthSessionValid, parseGoogleCredential, restoreAuthSession, type AuthSession } from "@/lib/auth";
 import { historyKey, requestHistory, restoreHistory, type Conversation, type Message } from "@/lib/history";
 import { readChatStream } from "@/lib/stream";
+import { apiUrl } from "@/lib/api";
 import { Answer } from "./answer";
 import { Icon, PlutoMark } from "./icon";
+import { LandingPage } from "./landing-page";
 
 const suggestions = [
   { label: "Understand a symptom", question: "What do the indexed books explain about the causes of headache?", icon: "chat" as const },
@@ -43,6 +46,7 @@ export function ChatApp() {
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState("");
   const [webAvailable, setWebAvailable] = useState(true);
+  const [auth, setAuth] = useState<AuthSession | null>(null);
   const abort = useRef<AbortController | null>(null);
   const sending = useRef(false);
   const historyWritable = useRef(true);
@@ -60,9 +64,17 @@ export function ChatApp() {
         setActiveId(restored[0]?.id ?? null);
       }
     } catch { historyWritable.current = false; setStorageError("Saved chats could not be loaded. You can continue, or clear this browser's saved chats."); }
+    try {
+      const savedAuth = localStorage.getItem(authStorageKey);
+      if (savedAuth) {
+        const restoredAuth = restoreAuthSession(savedAuth);
+        if (restoredAuth) setAuth(restoredAuth);
+        else localStorage.removeItem(authStorageKey);
+      }
+    } catch { /* Ignore browser storage failures for auth state; user can sign in again. */ }
     setReady(true);
     const controller = new AbortController();
-    fetch("/api/health", { signal: controller.signal }).then(async (response) => {
+    Promise.resolve().then(() => fetch(apiUrl("health"), { signal: controller.signal })).then(async (response) => {
       if (!response.ok) throw new Error("The demo server is not ready.");
       const health: unknown = await response.json();
       if (typeof health === "object" && health && "webAvailable" in health) setWebAvailable(health.webAvailable === true);
@@ -95,9 +107,37 @@ export function ChatApp() {
     } : item));
   }
 
+  function handleCredential(credential: string) {
+    try {
+      const session = parseGoogleCredential(credential);
+      setAuth(session);
+      setError("");
+      try { localStorage.setItem(authStorageKey, JSON.stringify(session)); }
+      catch { /* Keep session in memory for this tab if storage is blocked. */ }
+      textarea.current?.focus();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not complete Google sign-in.");
+    }
+  }
+
+  function signOut() {
+    if (sending.current) return;
+    try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+    window.google?.accounts?.id?.disableAutoSelect?.();
+    setAuth(null);
+    setError("");
+    setSidebarOpen(false);
+  }
+
   async function send(text = question) {
     const trimmed = text.trim();
     if (!trimmed || trimmed.length > 2000 || sending.current || !ready) return;
+    if (!isAuthSessionValid(auth)) {
+      try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+      setAuth(null);
+      setError("Sign in with Google to ask a question.");
+      return;
+    }
     if ((conversation?.messages.length ?? 0) >= 98) { setError("This chat has reached the demo limit. Start a new chat to continue."); return; }
     sending.current = true;
     const id = activeId ?? crypto.randomUUID();
@@ -114,11 +154,21 @@ export function ChatApp() {
     const controller = new AbortController();
     abort.current = controller;
     try {
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: trimmed, includeWeb, history }), signal: controller.signal });
+      const response = await fetch(apiUrl("chat"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${auth.token}` },
+        body: JSON.stringify({ question: trimmed, includeWeb, history }),
+        signal: controller.signal
+      });
+      if (response.status === 401) {
+        try { localStorage.removeItem(authStorageKey); } catch { /* ignore */ }
+        setAuth(null);
+        setQuestion(trimmed);
+      }
       await readChatStream(response, (event) => updateAnswer(id, messageId, (message) => applyEvent(message, event)));
     } catch (failure) {
       const stopped = controller.signal.aborted;
-      const message = stopped ? "Response stopped. You can ask another question." : failure instanceof Error ? failure.message : "The answer could not be completed. Please retry.";
+      const message = stopped ? "Response stopped in this browser. The server may continue processing until its deadline." : failure instanceof Error ? failure.message : "The answer could not be completed. Please retry.";
       if (!stopped) setError(message);
       updateAnswer(id, messageId, (answer) => ({
         ...answer, status: stopped ? "stopped" : "error",
@@ -126,6 +176,21 @@ export function ChatApp() {
           : [{ kind: "books", text: "", sources: [], status: stopped ? "stopped" : "error", notice: message }]
       }));
     } finally { sending.current = false; abort.current = null; setBusy(false); textarea.current?.focus(); }
+  }
+
+  if (!ready) {
+    return <div className="landing-shell landing-loading" aria-busy="true">
+      <div className="brand"><PlutoMark /><span>pluto<span className="brand-dot">.</span></span></div>
+    </div>;
+  }
+
+  if (!auth) {
+    return <LandingPage
+      error={error}
+      onDismissError={() => setError("")}
+      onCredential={handleCredential}
+      onError={(message) => setError(message)}
+    />;
   }
 
   return <div className="app-shell">
@@ -145,6 +210,13 @@ export function ChatApp() {
       <div className="sidebar-bottom">
         <div className="local-note"><Icon name="shield" size={16}/><span>Just this browser.<br/><small>Your chat history stays on this device.</small></span></div>
         <button className="clear-history" disabled={busy || (!conversations.length && !storageError)} onClick={() => { if (!window.confirm("Delete all saved chats from this browser?")) return; try { localStorage.removeItem(historyKey); historyWritable.current = true; setConversations([]); setActiveId(null); setStorageError(""); } catch { setStorageError("This browser blocked clearing saved chats. Please clear site data in your browser settings."); } }}><Icon name="trash" size={14}/>Clear history</button>
+        {auth && <div className="account-card">
+          <div className="account-meta">
+            <Icon name="user" size={15}/>
+            <div><strong>{auth.name || "Signed in"}</strong><small>{auth.email}</small></div>
+          </div>
+          <button className="sign-out" type="button" disabled={busy} onClick={signOut}><Icon name="logout" size={14}/>Sign out</button>
+        </div>}
         <div className="demo-label"><span/>EXPLORATION MODE <b>POC</b></div>
       </div>
     </aside>

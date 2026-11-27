@@ -1,0 +1,12 @@
+.env
+.env.*
+local.settings.json
+.test-host/
+.local-storage/
+src/
+scripts/
+tsconfig.json
+node_modules/azure-functions-core-tools/
+node_modules/azurite/
+node_modules/esbuild/
+node_modules/@esbuild/

@@ -1,8 +1,7 @@
-import "server-only";
 import { z } from "zod";
 import { getConfig } from "./config";
 import { selectEvidence } from "./evidence";
-import type { ChatRequest } from "@/lib/contract";
+import type { ChatRequest } from "../../../src/lib/contract";
 
 const resultSchema = z.object({ value: z.array(z.object({
   chunk_id: z.string(), parent_id: z.string().optional(), title: z.string(), chunk: z.string()

@@ -1,10 +1,9 @@
-import "server-only";
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses";
-import { safeUrl, type ChatEvent, type ChatRequest, type Source } from "@/lib/contract";
+import { safeUrl, type ChatEvent, type ChatRequest, type Source } from "../../../src/lib/contract";
 import { getConfig } from "./config";
 import { citedBookSources, hasUnknownBookCitations, type Evidence } from "./evidence";
-import { bookInstructions, webInstructions } from "@/skills/medical-book-assistant";
+import { bookInstructions, webInstructions } from "../skills/medical-book-assistant";
 
 type Emit = (event: ChatEvent) => void;
 

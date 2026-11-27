@@ -1,5 +1,4 @@
-import "server-only";
-import type { ChatEvent, ChatRequest } from "@/lib/contract";
+import type { ChatEvent, ChatRequest } from "../../../src/lib/contract";
 import { getConfig } from "./config";
 import { retrieveBooks } from "./search";
 import { streamModel } from "./openai";

@@ -3,24 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24 <27" },
+  "engines": {   "node": ">=24 <25" },
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build && node scripts/prepare-standalone.mjs",
-    "start": "node .next/standalone/server.js",
+    "dev": "node scripts/local.mjs dev",
+    "build": "node scripts/build-frontend.mjs",
+    "build:api": "npm --prefix api run build",
+    "start": "node scripts/local.mjs preview",
+    "start:frontend": "serve out --listen tcp://127.0.0.1:3201 --no-clipboard",
+    "start:api": "npm --prefix api start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit && npm --prefix api run typecheck && tsc --project tsconfig.tests.json",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:azure": "node --env-file=.env scripts/azure-smoke.mjs"
+    "test:host": "node scripts/test-host.mjs",
+    "test:artifacts": "node scripts/check-artifacts.mjs",
+    "test:azure": "npm --prefix api run test:azure"
   },
   "dependencies": {
     "next": "16.4.6",
-    "openai": "7.57.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-markdown": "^10.1.0",
-    "server-only": "^0.0.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {
@@ -31,6 +34,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.39.0",
     "eslint-config-next": "16.4.6",
+    "serve": "14.2.8",
     "tailwindcss": "^4.0.0",
     "typescript": "~5.9.3",
     "vitest": "5.1.0"

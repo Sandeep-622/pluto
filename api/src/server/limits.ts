@@ -1,10 +1,8 @@
-import "server-only";
-
 const windowMs = 60000;
 const visitors = new Map<string, { started: number; count: number }>();
 let active = 0;
 
-export function reserveRequest(visitor: string): (() => void) | undefined {
+export function reserveRequest(visitor = "shared"): (() => void) | undefined {
   const now = Date.now();
   for (const [key, value] of visitors) {
     if (now - value.started >= windowMs) visitors.delete(key);

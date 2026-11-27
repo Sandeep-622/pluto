@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("@/lib/server/config", () => ({ getConfig: () => ({ AZURE_OPENAI_CHAT_DEPLOYMENT: "test-luna" }) }));
-import { modelRequest } from "@/lib/server/openai";
+vi.mock("@api/server/config", () => ({ getConfig: () => ({ AZURE_OPENAI_CHAT_DEPLOYMENT: "test-luna" }) }));
+import { modelRequest } from "@api/server/openai";
 
 beforeEach(() => { vi.clearAllMocks(); });
 describe("model request boundaries", () => {

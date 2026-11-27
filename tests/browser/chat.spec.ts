@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { ChatEvent } from "../../src/lib/contract";
 
 const bookEvents: ChatEvent[] = [
@@ -10,23 +10,83 @@ const bookEvents: ChatEvent[] = [
 ];
 const encode = (events: ChatEvent[]) => events.map((event) => JSON.stringify(event)).join("\n") + "\n";
 
+function makeTestJwt(overrides: Record<string, unknown> = {}) {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({
+    sub: "google-reader-1",
+    email: "reader@example.com",
+    name: "Pluto Reader",
+    email_verified: true,
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    ...overrides
+  })).toString("base64url");
+  return `${header}.${payload}.pluto-test-sig`;
+}
+
+async function signIn(page: Page) {
+  await page.getByRole("button", { name: "Sign in with Google" }).click();
+  await expect(page.getByLabel("Your medical book question")).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
+  const testToken = makeTestJwt();
+  await page.addInitScript((credential: string) => {
+    let onCredential: ((response: { credential?: string }) => void) | undefined;
+    (window as unknown as { google: unknown }).google = {
+      accounts: {
+        id: {
+          initialize(config: { callback: (response: { credential?: string }) => void }) {
+            onCredential = config.callback;
+          },
+          renderButton(parent: HTMLElement) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = "Sign in with Google";
+            button.addEventListener("click", () => onCredential?.({ credential }));
+            parent.appendChild(button);
+          },
+          disableAutoSelect() {}
+        }
+      }
+    };
+  }, testToken);
   await page.route("**/api/health", (route) => route.fulfill({ json: { status: "ok", webAvailable: true } }));
+});
+
+test("requires Google sign-in on the landing page before entering the app, persists session, and supports sign-out", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
+  await expect(page.getByLabel("Your medical book question")).toHaveCount(0);
+  await expect(page.getByLabel("Saved conversations")).toHaveCount(0);
+
+  await signIn(page);
+  await expect(page.getByText("reader@example.com")).toBeVisible();
+  await expect(page.getByLabel("Saved conversations")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByLabel("Your medical book question")).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
+  await expect(page.getByLabel("Saved conversations")).toHaveCount(0);
 });
 
 test("book-only chat has citations and browser history, and can be cleared", async ({ page }) => {
   let includeWeb: unknown;
+  let authHeader: string | undefined;
   await page.route("**/api/chat", (route) => {
     includeWeb = route.request().postDataJSON().includeWeb;
+    authHeader = route.request().headers()["authorization"];
     return route.fulfill({ contentType: "application/x-ndjson", body: encode(bookEvents) });
   });
   await page.goto("/");
+  await signIn(page);
   await expect(page.getByRole("checkbox", { name: "Include web" })).not.toBeChecked();
   await page.getByLabel("Your medical book question").fill("What causes headache?");
   await page.getByRole("button", { name: "Send question" }).click();
   await expect(page.getByText("This is a supported book explanation", { exact: false })).toBeVisible();
   await expect(page.getByLabel("Book citations")).toContainText("Clinical Medicine");
   expect(includeWeb).toBe(false);
+  expect(authHeader).toMatch(/^Bearer /);
   await page.reload();
   await expect(page.getByLabel("Book citations")).toContainText("Clinical Medicine");
   await page.getByRole("button", { name: "New conversation", exact: false }).click();
@@ -49,6 +109,7 @@ test("opt-in web content and citations appear before books and restore with thei
     return route.fulfill({ contentType: "application/x-ndjson", body: encode(events) });
   });
   await page.goto("/");
+  await signIn(page);
   await page.getByRole("checkbox", { name: "Include web" }).check();
   await page.getByLabel("Your medical book question").fill("Explain headache");
   await page.getByRole("button", { name: "Send question" }).click();
@@ -70,6 +131,7 @@ test("a failed web section is visible while the book answer remains usable", asy
     ...bookEvents
   ]) }));
   await page.goto("/");
+  await signIn(page);
   await page.getByRole("checkbox", { name: "Include web" }).check();
   await page.getByLabel("Your medical book question").fill("Headache");
   await page.getByRole("button", { name: "Send question" }).click();
@@ -82,6 +144,7 @@ test("interrupted responses are not presented as complete", async ({ page }) => 
     { type: "start", section: "books" }, { type: "delta", section: "books", text: "Partial answer" }
   ]) }));
   await page.goto("/");
+  await signIn(page);
   await page.getByLabel("Your medical book question").fill("Headache");
   await page.getByRole("button", { name: "Send question" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "before the answer finished" })).toBeVisible();
@@ -91,9 +154,33 @@ test("interrupted responses are not presented as complete", async ({ page }) => 
 test("mobile layout keeps the composer accessible and navigation usable", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  await signIn(page);
   await expect(page.getByLabel("Your medical book question")).toBeVisible();
   await page.getByRole("button", { name: "Open navigation" }).click();
   await expect(page.getByRole("button", { name: "New conversation", exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Close navigation" }).click({ position: { x: 350, y: 100 } });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("static UI streams from the actual cross-origin Functions host", async ({ page }) => {
+  await page.unroute("**/api/health");
+  await page.goto("/");
+  await signIn(page);
+  await page.getByLabel("Your medical book question").fill("Local integration");
+  await page.getByRole("button", { name: "Send question" }).click();
+  await expect(page.getByText("Local Functions streaming is working.", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("Book citations")).toContainText("Local mock book");
+  await expect(page.getByRole("button", { name: "Send question" })).toBeVisible();
+});
+
+test("stopping a real cross-origin stream leaves the UI usable", async ({ page }) => {
+  await page.goto("/");
+  await signIn(page);
+  await page.getByLabel("Your medical book question").fill("slow");
+  await page.getByRole("button", { name: "Send question" }).click();
+  await expect(page.getByText("Local Functions streaming is working.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Stop response" }).click();
+  await expect(page.getByRole("button", { name: "Send question" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Your medical book question")).toBeEnabled();
 });
