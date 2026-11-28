@@ -1,4 +1,4 @@
-export function apiUrl(path: "chat" | "health" | "feedback"): string {
+export function apiUrl(path: "chat" | "health" | "feedback" | "profile" | "track"): string {
   const value = process.env.NEXT_PUBLIC_API_BASE_URL;
   if (!value) throw new Error("The API address is not configured. Set NEXT_PUBLIC_API_BASE_URL and rebuild the website.");
   let base: URL;

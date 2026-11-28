@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpRequest, HttpResponse } from "@azure/functions";
 import { createHandlers } from "@api/http";
+import type { ProfileResponse } from "../src/lib/contract";
 
 const config = (): { CHAT_ENABLED: "true" | "false"; ENABLE_WEB_SEARCH: "true" | "false"; GOOGLE_CLIENT_ID: string } => ({
   CHAT_ENABLED: "true",
@@ -14,7 +15,10 @@ const getConfig = vi.fn(config);
 const verifyAuth = vi.fn(async () => ({ sub: "google-user-123", email: "reader@example.com", name: "Reader" }));
 const recordAnalytics = vi.fn(async () => undefined);
 const recordFeedback = vi.fn(async () => undefined);
-const handlers = createHandlers({ runChat: model, reserveRequest: reserve, getConfig, verifyAuth, recordAnalytics, recordFeedback });
+const getProfile = vi.fn(async (): Promise<ProfileResponse | undefined> => ({ completed: false }));
+const saveProfile = vi.fn(async () => true);
+const recordTrack = vi.fn(async () => undefined);
+const handlers = createHandlers({ runChat: model, reserveRequest: reserve, getConfig, verifyAuth, recordAnalytics, recordFeedback, getProfile, saveProfile, recordTrack });
 
 function request(body: unknown, headers: Record<string, string> = {}) {
   return new HttpRequest({
@@ -153,6 +157,86 @@ describe("Functions request boundary", () => {
       inputTokens: 150,
       outputTokens: 60
     }));
+  });
+
+  it("passes tracking ids and derived stream metrics to analytics", async () => {
+    model.mockImplementation(async (_request, emit, _signal, onMetrics) => {
+      emit({ type: "start", section: "web" });
+      emit({ type: "delta", section: "web", text: "abcd" });
+      emit({ type: "sources", section: "web", sources: [{ kind: "web", id: "W1", title: "A", url: "https://example.test/a" }, { kind: "web", id: "W2", title: "B", url: "https://example.test/b" }] });
+      emit({ type: "error", section: "books", message: "failed" });
+      onMetrics?.({ bookHits: 0 });
+      emit({ type: "done" });
+    });
+    const ids = { messageId: "message-0001", sessionId: "session-0001", conversationId: "conv-00001" };
+    await new HttpResponse(await handlers.chat(request({ question: "headache", includeWeb: true, ...ids }))).text();
+    expect(recordAnalytics).toHaveBeenCalledWith(expect.objectContaining({
+      ...ids, webHits: 2, answerChars: 4, errorSections: "books", noEvidence: false, status: "error"
+    }));
+    const [entry] = recordAnalytics.mock.calls[0] as unknown as [{ timeToFirstTokenMs?: number }];
+    expect(entry.timeToFirstTokenMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("flags answers with no supporting book passages", async () => {
+    model.mockImplementation(async (_request, emit) => { emit({ type: "delta", section: "books", text: "none found" }); emit({ type: "done" }); });
+    await new HttpResponse(await handlers.chat(request({ question: "obscure" }))).text();
+    expect(recordAnalytics).toHaveBeenCalledWith(expect.objectContaining({ noEvidence: true, bookHits: 0 }));
+  });
+
+  it("rejects malformed tracking ids on chat", async () => {
+    expect((await handlers.chat(request({ question: "hello", sessionId: "bad id!" }))).status).toBe(400);
+    expect(model).not.toHaveBeenCalled();
+  });
+
+  it("serves and saves the one-time profile for the verified user only", async () => {
+    const url = "http://localhost:7071/api/profile";
+    const headers = { origin: "http://localhost:3201", "content-type": "application/json", authorization: "Bearer valid-test-token" };
+    expect((await handlers.profile(new HttpRequest({ url, method: "GET", headers: { origin: headers.origin } }))).status).toBe(401);
+
+    const first = await handlers.profile(new HttpRequest({ url, method: "GET", headers }));
+    expect(first.status).toBe(200);
+    expect(first.jsonBody).toEqual({ completed: false });
+    expect(getProfile).toHaveBeenCalledWith({ sub: "google-user-123", email: "reader@example.com" });
+
+    const post = (body: unknown) => handlers.profile(new HttpRequest({ url, method: "POST", headers, body: { string: JSON.stringify(body) } }));
+    expect((await post({ role: "astronaut", ageBand: "18_24" })).status).toBe(400);
+    expect((await post({ role: "doctor", ageBand: "18_24", userId: "someone-else" })).status).toBe(400);
+    expect(saveProfile).not.toHaveBeenCalled();
+    const saved = await post({ role: "doctor", ageBand: "35_44" });
+    expect(saved.status).toBe(200);
+    expect(saved.jsonBody).toEqual({ completed: true, role: "doctor", ageBand: "35_44" });
+    expect(saveProfile).toHaveBeenCalledWith({ sub: "google-user-123", email: "reader@example.com" }, { role: "doctor", ageBand: "35_44" });
+
+    saveProfile.mockResolvedValueOnce(false);
+    expect((await post({ role: "doctor", ageBand: "35_44" })).status).toBe(503);
+    getProfile.mockResolvedValueOnce(undefined);
+    expect((await handlers.profile(new HttpRequest({ url, method: "GET", headers }))).status).toBe(503);
+  });
+
+  it("allows GET and POST preflight on profile only", async () => {
+    const preflight = (method: string) => new HttpRequest({ url: "http://localhost:7071/api/profile", method: "OPTIONS", headers: { origin: "http://localhost:3201", "access-control-request-method": method, "access-control-request-headers": "authorization" } });
+    for (const method of ["GET", "POST"]) expect((await handlers.profile(preflight(method))).status).toBe(204);
+    expect((await handlers.profile(preflight("DELETE"))).status).toBe(403);
+    expect((await handlers.track(preflight("GET"))).status).toBe(403);
+    const put = new HttpRequest({ url: "http://localhost:7071/api/profile", method: "PUT", headers: { origin: "http://localhost:3201" } });
+    expect((await handlers.profile(put)).status).toBe(405);
+  });
+
+  it("validates and records session and UI tracking events", async () => {
+    const send = (body: unknown, authorization = "Bearer valid-test-token") => handlers.track(new HttpRequest({
+      url: "http://localhost:7071/api/track", method: "POST",
+      headers: { origin: "http://localhost:3201", "content-type": "application/json", authorization },
+      body: { string: JSON.stringify(body) }
+    }));
+    expect((await send({ type: "session_heartbeat", sessionId: "session-0001", activeSeconds: 30 }, "")).status).toBe(401);
+    expect((await send({ type: "session_heartbeat", sessionId: "session-0001", activeSeconds: -1 })).status).toBe(400);
+    expect((await send({ type: "ui", sessionId: "session-0001", name: "drop_table" })).status).toBe(400);
+    expect((await send({ type: "session_start", sessionId: "session-0001", device: "fridge" })).status).toBe(400);
+    expect(recordTrack).not.toHaveBeenCalled();
+    const ok = await send({ type: "session_start", sessionId: "session-0001", device: "mobile", locale: "en-IN" });
+    expect(ok.status).toBe(204);
+    expect(recordTrack).toHaveBeenCalledWith({ sub: "google-user-123", email: "reader@example.com" }, { type: "session_start", sessionId: "session-0001", device: "mobile", locale: "en-IN" });
+    expect((await send({ type: "ui", sessionId: "session-0001", name: "suggestion_clicked", detail: "Understand a symptom" })).status).toBe(204);
   });
 
   it("requires auth and validates payloads on POST /api/feedback", async () => {

@@ -11,7 +11,9 @@
     "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --packages=external --outfile=dist/index.js",
     "typecheck": "tsc --noEmit",
     "start": "node scripts/start.mjs",
-    "test:azure": "node --env-file=.env scripts/azure-smoke.mjs"
+    "test:azure": "node --env-file=.env scripts/azure-smoke.mjs",
+    "analytics:emulator": "node node_modules/azurite/dist/src/azurite.js --silent --location .local-analytics --skipApiVersionCheck",
+    "analytics:dump": "node scripts/analytics-dump.mjs"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.2",

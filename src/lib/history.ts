@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { feedbackValueSchema, sectionStateSchema } from "./contract";
+import { feedbackReasonSchema, feedbackValueSchema, sectionStateSchema } from "./contract";
 
 export const messageSchema = z.object({
   id: z.string(), role: z.enum(["user", "assistant"]), text: z.string().max(100000),
   includeWeb: z.boolean(), sections: z.array(sectionStateSchema).max(2),
   status: z.enum(["loading", "complete", "error", "stopped"]),
-  feedback: feedbackValueSchema.optional()
+  feedback: feedbackValueSchema.optional(),
+  feedbackReason: feedbackReasonSchema.optional()
 });
 export type Message = z.infer<typeof messageSchema>;
 const conversationSchema = z.object({

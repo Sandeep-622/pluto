@@ -44,6 +44,8 @@ const handlers = createHandlers({
 app.setup({ enableHttpStream: true });
 app.http("chat", { route: "chat", methods: ["POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.chat });
 app.http("feedback", { route: "feedback", methods: ["POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.feedback });
+app.http("profile", { route: "profile", methods: ["GET", "POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.profile });
+app.http("track", { route: "track", methods: ["POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.track });
 app.http("health", {
   route: "health", methods: ["GET", "OPTIONS"], authLevel: "anonymous",
   async handler(request) {

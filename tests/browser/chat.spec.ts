@@ -51,6 +51,8 @@ test.beforeEach(async ({ page }) => {
     };
   }, testToken);
   await page.route("**/api/health", (route) => route.fulfill({ json: { status: "ok", webAvailable: true } }));
+  await page.route("**/api/profile", (route) => route.fulfill({ json: { completed: true, role: "doctor", ageBand: "25_34" } }));
+  await page.route("**/api/track", (route) => route.fulfill({ status: 204 }));
 });
 
 test("requires Google sign-in on the landing page before entering the app, persists session, and supports sign-out", async ({ page }) => {
@@ -68,6 +70,55 @@ test("requires Google sign-in on the landing page before entering the app, persi
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in to continue" })).toBeVisible();
   await expect(page.getByLabel("Saved conversations")).toHaveCount(0);
+});
+
+test("first sign-in shows role cards once, saves the profile and never asks again", async ({ page }) => {
+  let saved: unknown;
+  const tracked: unknown[] = [];
+  await page.route("**/api/profile", (route) => {
+    if (route.request().method() === "POST") { saved = route.request().postDataJSON(); return route.fulfill({ json: { completed: true, ...(saved as object) } }); }
+    return route.fulfill({ json: { completed: false } });
+  });
+  await page.route("**/api/track", (route) => { tracked.push(route.request().postDataJSON()); return route.fulfill({ status: 204 }); });
+  await page.route("**/api/chat", (route) => {
+    tracked.push({ chat: route.request().postDataJSON() });
+    return route.fulfill({ contentType: "application/x-ndjson", body: encode(bookEvents) });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sign in with Google" }).click();
+  await expect(page.getByRole("heading", { name: "Tell us a little about you" })).toBeVisible();
+  await expect(page.getByLabel("Your medical book question")).toHaveCount(0);
+  const submit = page.getByRole("button", { name: "Continue to Pluto" });
+  await expect(submit).toBeDisabled();
+  await page.getByText("MBBS student", { exact: true }).click();
+  await expect(submit).toBeDisabled();
+  await page.getByLabel("Age range").selectOption("18_24");
+  await submit.click();
+  await expect(page.getByLabel("Your medical book question")).toBeVisible();
+  expect(saved).toEqual({ role: "mbbs_student", ageBand: "18_24" });
+
+  await page.getByLabel("Your medical book question").fill("What causes headache?");
+  await page.getByRole("button", { name: "Send question" }).click();
+  await expect(page.getByLabel("Book citations")).toBeVisible();
+  await page.getByRole("button", { name: "Not helpful" }).click();
+  await page.getByRole("button", { name: "Poor sources" }).click();
+  await expect(page.getByRole("button", { name: "Poor sources" })).toHaveAttribute("aria-pressed", "true");
+  const chat = tracked.find((entry) => typeof entry === "object" && entry && "chat" in entry) as { chat: Record<string, unknown> };
+  expect(chat.chat).toMatchObject({ question: "What causes headache?", includeWeb: false });
+  for (const key of ["messageId", "sessionId", "conversationId"]) expect(typeof chat.chat[key]).toBe("string");
+  expect(tracked).toContainEqual(expect.objectContaining({ type: "session_start", device: "desktop" }));
+
+  await page.reload();
+  await expect(page.getByLabel("Your medical book question")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tell us a little about you" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Poor sources" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a failing profile service never blocks the app", async ({ page }) => {
+  await page.route("**/api/profile", (route) => route.fulfill({ status: 503, json: { error: "down" } }));
+  await page.goto("/");
+  await signIn(page);
+  await expect(page.getByRole("heading", { name: "Tell us a little about you" })).toHaveCount(0);
 });
 
 test("book-only chat has citations and browser history, and can be cleared", async ({ page }) => {
