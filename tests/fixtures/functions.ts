@@ -20,7 +20,7 @@ const handlers = createHandlers({
     }
     throw new Error("Invalid test token");
   },
-  async runChat(request, emit, signal) {
+  async runChat(request, emit, signal, onMetrics) {
     record("started");
     signal.addEventListener("abort", () => record("aborted"), { once: true });
     if (request.question === "fail") throw new Error("Simulated provider failure");
@@ -33,6 +33,7 @@ const handlers = createHandlers({
     emit({ type: "start", section: "books" });
     emit({ type: "delta", section: "books", text: "Local Functions streaming is working. [B1]" });
     await delay(request.question === "slow" ? 3000 : 350, undefined, { signal });
+    onMetrics?.({ bookHits: 1, inputTokens: 120, outputTokens: 45 });
     emit({ type: "sources", section: "books", sources: [{ kind: "books", id: "B1", title: "Local mock book" }] });
     emit({ type: "section-done", section: "books" });
     emit({ type: "done" });
@@ -42,6 +43,9 @@ const handlers = createHandlers({
 
 app.setup({ enableHttpStream: true });
 app.http("chat", { route: "chat", methods: ["POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.chat });
+app.http("feedback", { route: "feedback", methods: ["POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.feedback });
+app.http("profile", { route: "profile", methods: ["GET", "POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.profile });
+app.http("track", { route: "track", methods: ["POST", "OPTIONS"], authLevel: "anonymous", handler: handlers.track });
 app.http("health", {
   route: "health", methods: ["GET", "OPTIONS"], authLevel: "anonymous",
   async handler(request) {

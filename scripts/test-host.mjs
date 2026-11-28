@@ -42,7 +42,12 @@ if (process.argv.includes("--serve")) {
     controller.abort();
     await delay(3300);
     const cancellationPropagated = (await host.events()).includes("aborted");
-    console.log(JSON.stringify({ host: "Core Tools v4", health: "passed", cors: "passed", invalidInput: "passed", incrementalStreaming: "passed", disconnectAbortsGeneration: cancellationPropagated, azureCalls: 0 }));
+
+    const feedbackRes = await fetch(`${base}/feedback`, { method: "POST", headers: { origin, "content-type": "application/json", authorization: "Bearer test-google-token" }, body: '{"messageId":"host-msg-1","feedback":"helpful","includeWeb":false}' });
+    assert.equal(feedbackRes.status, 200);
+    assert.equal((await feedbackRes.json()).feedback, "helpful");
+
+    console.log(JSON.stringify({ host: "Core Tools v4", health: "passed", cors: "passed", invalidInput: "passed", incrementalStreaming: "passed", feedback: "passed", disconnectAbortsGeneration: cancellationPropagated, azureCalls: 0 }));
     if (!cancellationPropagated) console.warn("The local Functions transport did not propagate a client disconnect; server work remains bounded by its deadline.");
   } finally { await host.stop(); }
 }
